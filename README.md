@@ -40,6 +40,7 @@ are — this is the fix.
 
 ```sh
 brew tap yterry/tap
+brew trust yterry/tap          # one-time: Homebrew 6 gates third-party taps
 brew install --cask razer-seiren
 ```
 
@@ -48,8 +49,10 @@ That installs **Seiren.app** to `/Applications` and, because the build is unsign
 so it launches with **no manual bypass**. Update later with `brew upgrade --cask
 razer-seiren`.
 
-> If Homebrew refuses the cask as an "untrusted tap" (newer Homebrew can gate
-> third-party taps), run `brew trust yterry/tap` once and retry.
+> The `brew trust` line is a one-time approval for a third-party tap — Homebrew 6+
+> requires it for any tap outside the official repos (older Homebrew ignores it
+> harmlessly). Skip it and you'll see *"Refusing to load cask … from untrusted
+> tap"*; just run it once and retry.
 
 That gets you **headphone monitoring** right away. To unlock the **EQ and noise
 suppression** — and send the *processed* voice to other apps — open
