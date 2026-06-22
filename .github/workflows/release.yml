@@ -1,0 +1,72 @@
+name: Release
+
+# Tag-triggered: pushing a v* tag builds the .app, zips it with a checksum, and
+# creates a GitHub Release. Unsigned/ad-hoc for now (no paid Developer ID) — the
+# release notes tell users the one-time Gatekeeper bypass.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # required for gh release create
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Derive version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: swift test
+
+      - name: Package .app (ad-hoc)
+        run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "dist/Seiren-${{ steps.ver.outputs.version }}.zip" \
+            "dist/Seiren-${{ steps.ver.outputs.version }}.zip.sha256" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Automated build for ${GITHUB_REF_NAME}. Unsigned .app — see the README 'Install' section for the one-time Gatekeeper bypass (or just \`brew install --cask razer-seiren\`, which clears it for you). macOS asks for Microphone permission on first launch (required to monitor, EQ, and denoise your voice)."
+
+      # Auto-bump the Homebrew tap so `brew upgrade` sees the new version. This is
+      # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a PAT with write
+      # access to yterry/homebrew-tap), and `continue-on-error` guarantees that a
+      # failed bump (bad token, push rejected, asset not yet propagated, …) can
+      # never fail a release that has already been published in the step above.
+      - name: Update Homebrew tap
+        continue-on-error: true
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "No HOMEBREW_TAP_TOKEN secret set — skipping tap bump."
+            exit 0
+          fi
+          bump() {
+            git clone "https://x-access-token:${TAP_TOKEN}@github.com/yterry/homebrew-tap.git" tap || return 1
+            cd tap || return 1
+            ./scripts/bump-cask.sh "${VERSION}" || return 1
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Casks/razer-seiren.rb
+            git diff --cached --quiet && { echo "cask already current"; return 0; }
+            git commit -m "razer-seiren ${VERSION}" || return 1
+            git push || return 1
+          }
+          bump || echo "::warning::Homebrew tap bump failed — run scripts/bump-cask.sh ${VERSION} in the tap manually."

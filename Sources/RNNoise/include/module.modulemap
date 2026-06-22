@@ -1,0 +1,4 @@
+module RNNoise {
+    umbrella header "rnnoise.h"
+    export *
+}

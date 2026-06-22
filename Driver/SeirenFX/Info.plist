@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.yterry.seiren-mac.SeirenFX</string>
+	<key>CFBundleName</key>
+	<string>SeirenFX</string>
+	<key>CFBundleExecutable</key>
+	<string>SeirenFX</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+
+	<!-- CFPlugIn wiring: coreaudiod looks up the AudioServerPlugIn type UUID
+	     (443ABAB8-E7B3-491A-B985-BEB9187030DB = kAudioServerPlugInTypeUUID),
+	     finds our factory UUID, then calls the C factory function it maps to. -->
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>F2A7B3C1-8D4E-4F6A-9B2C-1E3D5F7A9B0C</key>
+		<string>SeirenFX_Create</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+		<array>
+			<string>F2A7B3C1-8D4E-4F6A-9B2C-1E3D5F7A9B0C</string>
+		</array>
+	</dict>
+</dict>
+</plist>

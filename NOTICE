@@ -1,0 +1,16 @@
+seiren-mac — third-party notices
+=================================
+
+This project bundles third-party source code:
+
+RNNoise  (Sources/RNNoise/)
+  Recurrent-neural-network noise suppression.
+  Copyright (c) Jean-Marc Valin, Xiph.Org Foundation, and Mozilla.
+  Licensed under the BSD 3-Clause License — see Sources/RNNoise/COPYING.
+  Upstream: https://github.com/xiph/rnnoise
+  The pre-trained model weights (Sources/RNNoise/src/rnnoise_data.c) are
+  vendored from upstream; the exact model is pinned in
+  Sources/RNNoise/MODEL_VERSION.
+
+seiren-mac itself is MIT-licensed — see LICENSE. The BSD-3 terms above apply
+only to the files under Sources/RNNoise/.

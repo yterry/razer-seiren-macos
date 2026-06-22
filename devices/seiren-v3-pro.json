@@ -1,0 +1,11 @@
+{
+  "name": "Razer Seiren V3 Pro",
+  "pid": 1422,
+  "hidUsagePage": 65363,
+  "notes": "pid 0x058E, usagePage 0xFF53 (Razer audio). Send channel: HID interface 3, report 0x07, Feature, 63 data bytes. Monitor bytes NOT yet captured. Once captured, fill monitorOn/monitorOff (and handshake if needed) and copy this file to ~/Library/Application Support/seiren-mac/devices/ to test without rebuilding.",
+  "commands": {
+    "monitorOn": null,
+    "monitorOff": null,
+    "handshake": null
+  }
+}

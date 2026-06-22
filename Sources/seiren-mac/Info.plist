@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Shown in the macOS Microphone permission prompt. REQUIRED: without an
+	     NSMicrophoneUsageDescription reachable by the running binary, the
+	     AVCaptureDevice mic prompt does not appear (the request is denied and,
+	     on some OS versions, the process is terminated). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Seiren reads your Razer Seiren microphone to monitor it in your headphones, apply the voice EQ and noise suppression, and route the processed voice to your other apps. The mic is used only for this audio processing.</string>
+
+	<!-- Run as a menu-bar agent: no Dock icon, no app switcher entry. Mirrors
+	     setActivationPolicy(.accessory); harmless for the command-line build and
+	     authoritative once bundled into a .app. -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<key>CFBundleIdentifier</key>
+	<string>com.yterry.seiren-mac</string>
+	<key>CFBundleName</key>
+	<string>Seiren</string>
+	<key>CFBundleDisplayName</key>
+	<string>Seiren</string>
+	<key>CFBundleExecutable</key>
+	<string>seiren-mac</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- package.sh / release.yml stamp the real release version here at build
+	     time (derived from the git tag); this literal is only what a raw
+	     `swift run` dev build reports. Kept roughly current to avoid confusion. -->
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+</dict>
+</plist>

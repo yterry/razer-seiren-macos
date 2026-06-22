@@ -1,0 +1,24 @@
+# SwiftPM / build
+.build/
+.swiftpm/
+*.xcodeproj
+Package.resolved
+
+# packaged app bundles / release artifacts
+dist/
+
+# macOS
+.DS_Store
+
+# local-only working notes / issue scratchpad
+.scratch/
+
+# captures (don't commit raw USB dumps; commit the decoded device JSON instead)
+captures/
+*.pcapng
+*.pcap
+
+# Razer Synapse log/data dumps used for analysis — large, machine-specific, and
+# may contain cookies/tokens/cache. Keep local; commit only decoded device JSON.
+User Data/
+*.dll
