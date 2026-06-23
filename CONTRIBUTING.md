@@ -8,6 +8,8 @@ capture for monitoring (and the EQ/denoise are device-agnostic DSP). That means
 most contributions are small: confirm a model works, fix a quirk, or improve the
 app.
 
+By participating, you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## How support for other Seiren / Razer mics works
 
 Monitoring is **device-agnostic**. `MonitorEngine` finds any audio device whose
