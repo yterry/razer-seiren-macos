@@ -10,8 +10,8 @@ assignees: ''
 
 Describe the feature, or the device you'd like supported.
 
-> **Adding device support is usually zero code** — seiren-mac matches any audio
-> device whose name contains "seiren" (the EQ/denoise are device-agnostic DSP).
+> **Adding device support is usually zero code** — Seiren for macOS matches any
+> audio device whose name contains "seiren" (the EQ/denoise are device-agnostic DSP).
 > The fastest path is to confirm it works
 > with `swift run seiren-probe monitor swmon 0.9` and report below. See
 > [CONTRIBUTING.md](../../CONTRIBUTING.md).

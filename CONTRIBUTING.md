@@ -1,7 +1,7 @@
 # Contributing
 
-Thanks for helping. `seiren-mac` is a small creator app for Razer Seiren mics on
-macOS — **monitoring, EQ, and noise suppression** — and its foundation, *hearing
+Thanks for helping. **Seiren for macOS** is a small creator app for Razer Seiren
+mics — **monitoring, EQ, and noise suppression** — and its foundation, *hearing
 yourself*, is solved the same way for the whole Seiren line: one full-duplex Core
 Audio loop that copies mic → headphone. There are no per-model command bytes to
 capture for monitoring (and the EQ/denoise are device-agnostic DSP). That means
