@@ -27,10 +27,10 @@ jobs:
     name: Build & publish release
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Select latest stable Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
 
@@ -95,6 +95,16 @@ jobs:
           # Empty when unsigned - package.sh then ad-hoc-signs, as before.
           SIGN_ID: ${{ steps.sign.outputs.sign_id }}
         run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
+
+      # Keep the signed build even if notarization times out or fails - the
+      # zip can then be notarized/stapled manually instead of rebuilding.
+      - name: Upload signed build as workflow artifact
+        if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-prenotarization
+          path: dist/Seiren-*.zip*
+          retention-days: 7
 
       - name: Notarize + staple
         if: steps.sign.outputs.signed == 'true'
