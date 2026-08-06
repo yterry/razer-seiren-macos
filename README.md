@@ -3,10 +3,10 @@
 [![CI](https://github.com/yterry/razer-seiren-macos/actions/workflows/ci.yml/badge.svg)](https://github.com/yterry/razer-seiren-macos/actions/workflows/ci.yml)
 
 **The macOS companion app for Razer Seiren microphones.** A tiny menu-bar app that
-gives a Seiren the full voice chain it has on Windows but never gets on a Mac —
-**hear yourself**, **shape your tone**, **kill background noise**, and send the
-*processed* voice to OBS / Zoom / Discord. (Razer Synapse supports no microphone
-at all on the Mac.)
+gives a Seiren the full experience it has on Windows but never gets on a Mac —
+**hear yourself**, **shape your tone**, **kill background noise**, send the
+*processed* voice to OBS / Zoom / Discord, and **drive the Chroma lighting**.
+(Razer Synapse supports no microphone at all on the Mac.)
 
 | | |
 |---|---|
@@ -14,6 +14,7 @@ at all on the Mac.)
 | 🎚 **Shape your voice** | A parametric **EQ** with Podcast / Studio / Broadcast presets. |
 | 🤫 **Kill the noise** | A zero-latency **gate**, plus opt-in **RNNoise "Studio"** neural denoise. |
 | 📡 **Reach every app** | A bundled virtual device (**Seiren FX**) so other apps record the *processed* voice, not the raw mic. |
+| 💡 **Light it up** | Native control of the mic's 12-LED **Chroma ring** - effects, static colors, brightness - no Synapse needed. |
 
 Flip a switch in the menu bar — no Synapse, no Windows, no kext. One admin prompt
 installs the Seiren FX audio device; everything else is one click.
@@ -44,10 +45,17 @@ brew trust yterry/tap          # one-time: Homebrew 6 gates third-party taps
 brew install --cask razer-seiren
 ```
 
-That installs **Seiren.app** to `/Applications` and, because the build is unsigned
-(no paid Apple Developer ID yet), clears the Gatekeeper quarantine flag for you —
-so it launches with **no manual bypass**. Update later with `brew upgrade --cask
-razer-seiren`.
+That installs **Seiren.app** to `/Applications`. Update to the latest release any
+time with:
+
+```sh
+brew update && brew upgrade --cask razer-seiren
+```
+
+Releases from **v1.1.0** on are **signed with an Apple Developer ID and
+notarized**, so the app opens with no Gatekeeper friction at all. (Installing
+the older v1.0.0? That build predates the Developer ID - the cask clears its
+Gatekeeper quarantine flag for you, so it still launches with no manual bypass.)
 
 > The `brew trust` line is a one-time approval for a third-party tap — Homebrew 6+
 > requires it for any tap outside the official repos (older Homebrew ignores it
@@ -63,13 +71,12 @@ asks for your password (a one-time admin prompt). See
 ### Option B — download the app (no Xcode needed)
 
 1. Grab `Seiren-<version>.zip` from the [latest release](https://github.com/yterry/razer-seiren-macos/releases/latest) and unzip it.
-2. Move **Seiren.app** to `/Applications` and double-click it.
-3. The build is **unsigned** (no paid Apple Developer ID yet), so macOS will say
-   it "cannot be opened." Clear it **once**: **System Settings → Privacy &
-   Security**, scroll to *"Seiren was blocked…"* → **Open Anyway** → authenticate
-   → **Open**. (Terminal alternative: `xattr -dr com.apple.quarantine /Applications/Seiren.app`.)
-   Future launches are silent. See [Is it safe?](#is-it-safe) for the trade-off.
-4. **To process what other apps record** (EQ + noise suppression in OBS / Zoom /
+2. Move **Seiren.app** to `/Applications` and double-click it. Releases from
+   **v1.1.0** on are signed and notarized, so it just opens - no Gatekeeper
+   dance. (Only the old **v1.0.0** build was unsigned; if you need it, clear it
+   once via **System Settings → Privacy & Security → Open Anyway**, or
+   `xattr -dr com.apple.quarantine /Applications/Seiren.app`.)
+3. **To process what other apps record** (EQ + noise suppression in OBS / Zoom /
    Discord), open the 🎙 menu → **Voice ▸ Install Seiren FX…** and enter your
    password once — that installs the bundled virtual audio device. Then pick
    **Seiren FX** as the mic in those apps. (Headphone monitoring works without
@@ -145,8 +152,9 @@ Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling 
   sudo scripts/install-driver.sh      # installs it + restarts coreaudiod (~1s glitch)
   ```
 
-It's an unsigned, MIT-licensed CoreAudio plug-in (`AudioServerPlugIn`) — no kext,
-no entitlements, no Developer ID required for a local install. Remove it with
+It's an MIT-licensed CoreAudio plug-in (`AudioServerPlugIn`) — no kext, no
+entitlements. The copy bundled in releases is signed alongside the app; a local
+build is ad-hoc signed, which is all a local install needs. Remove it with
 `sudo scripts/install-driver.sh --uninstall`.
 
 Then, in the app you record or stream with, **select “Seiren FX” as the
@@ -170,6 +178,25 @@ Under **🎙 → Voice ▸ Noise suppression** (creator path — needs Seiren FX
 When you monitor through Seiren FX, the EQ and the gate are heard in your monitor
 **and** by apps recording **Seiren FX**; Studio denoise applies to the Seiren FX
 broadcast only.
+
+### Lighting
+
+The V3 Pro's ring of 12 RGB LEDs is fully controllable from the app - no Synapse,
+no Windows.
+Open **🎙 → Lighting ▸** and pick **Spectrum** (the device default), **Breathing**,
+**Wave**, a **Static** color (nine-color palette), or **Off**, and set
+**Brightness** with the slider.
+Your choice is remembered and re-applied whenever the mic reconnects, because the
+hardware forgets its lighting state on unplug.
+
+- The first lighting change prompts for **Input Monitoring** permission - that is
+  how macOS gates the mic's HID control channel (grant it later under **System
+  Settings → Privacy & Security → Input Monitoring** if you miss the prompt).
+  The audio features never need this, and until you touch Lighting the app
+  leaves the device's lights (and that permission) completely alone.
+- CLI equivalent for scripting and diagnostics: `swift run seiren-probe lighting`.
+- How the protocol was recovered from Synapse's own lighting engine (no USB
+  capture involved): [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §5.
 
 ### Run the tests / dev build
 
@@ -267,21 +294,24 @@ Full investigation and evidence: [`docs/HARDWARE_SIDETONE.md`](docs/HARDWARE_SID
 - **Creator features need Seiren FX.** The EQ and noise suppression reach your
   monitor and other apps only through the bundled **Seiren FX** device — install it
   once from **Voice ▸**. Plain headphone monitoring works without it.
-- **Unsigned build.** Until there's a notarized release, you're running a binary
-  built from this source. Gatekeeper may warn on a downloaded build (Homebrew clears
-  it); a local `swift build` run is fine.
+- **Lighting needs Input Monitoring (TCC).** The Chroma ring is driven over the
+  mic's HID channel, which macOS gates behind **Input Monitoring**. The app only
+  asks when you first use Lighting.
+- **Old builds (v1.0.0 and earlier) are unsigned.** Current releases are signed
+  and notarized; only the old builds need the one-time Gatekeeper bypass.
 - **Headphones go in the Seiren, not the Mac.** Monitoring routes mic →
   *Seiren's* output. Plug your headphones into the mic.
 
 ## Is it safe?
 
-The downloadable app is **unsigned** — there's no paid Apple Developer ID behind
-it yet — so macOS hasn't notarized it and Gatekeeper warns on first launch. That's
-why the download asks you to **Open Anyway** once (Homebrew clears it for you).
-If you'd rather not trust a prebuilt binary, **build it from source** (Option C) — the whole app is this repo,
-no dependencies. Released zips ship with a **SHA-256 checksum** so you can verify
-the download. A notarized, double-click-clean release will come if/when there's a
-Developer ID.
+Releases from **v1.1.0** on are **signed with an Apple Developer ID and notarized
+by Apple**, so Gatekeeper opens them cleanly - no bypass, no warnings.
+If you'd rather not trust a prebuilt binary anyway, **build it from source**
+(Option C) - the whole app is this repo, no dependencies. Released zips ship with
+a **SHA-256 checksum** so you can verify the download.
+(The old **v1.0.0** build predates the Developer ID and is unsigned; its one-time
+**Open Anyway** instructions live in that release's notes, and the Homebrew cask
+clears its quarantine flag automatically.)
 
 ## Architecture
 
@@ -348,8 +378,9 @@ swift build
 
 - [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
       virtual-device foundation (per-source levels into one broadcast bus).
-- [ ] **Notarization** — removes the one-time Gatekeeper bypass, but needs a paid
-      Apple Developer ID.
+- [ ] **Notarization** - Developer ID in hand and the release pipeline signs,
+      notarizes, and staples when the signing secrets are configured; flips to
+      shipped with the v1.1.0 release.
 
 See [`docs/CREATOR_DESIGN.md`](docs/CREATOR_DESIGN.md) for the full design.
 
