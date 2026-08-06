@@ -44,13 +44,14 @@ touching audio.
 | `0x08` | `0x0B` Telephony | Input | — | mute / hook |
 | `0x55` | `0xFF90` vendor | In **+ Out** | 63 B | vendor channel |
 | `0x41` | `0xFF82` vendor | In **+ Out** | — | vendor channel |
-| **`0x07`** | **`0xFF53` vendor** | **Feature** | **63 B** | **Razer audio (usage `0xF0`)** |
+| **`0x07`** | **`0xFF53` vendor** | **Feature** | **64 B** | **Razer control (usage `0xF0`) — audio + lighting** |
 | `0x05` | `0xFF53` | Input | 15 B | audio status/events (`0xF2`) |
 
-**`0xFF53` is the Razer-audio vendor usage page.** Its **63-byte Feature report on
-report ID `0x07`** is the prime channel for monitoring/DSP commands. 63 payload
-bytes + 1 report-ID byte = the 64-byte Razer-audio "PA" frame. Fallbacks if a
-capture says otherwise: `0x55`/`0xFF90` (Output) or `0x41`/`0xFF82` (Output).
+**`0xFF53` is the Razer-audio vendor usage page.** Its **64-byte Feature report on
+report ID `0x07`** is the prime channel for control commands (audio DSP and
+lighting). 64 payload bytes + 1 report-ID byte = 65 on the wire; the body layout
+is the "Device25" report in §5. Fallbacks if a capture says otherwise:
+`0x55`/`0xFF90` (Output) or `0x41`/`0xFF82` (Output).
 
 The macOS send is simply:
 
@@ -59,6 +60,16 @@ IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, /*reportID*/ 0x07, payload
 ```
 
 ## 2. Razer audio command grammar
+
+> **⚠️ Correction (Synapse-4 log mining, 2026-08-05): the V3 Pro does not use the
+> "PA" frame.**
+> Synapse's middleware log records the full `dataSend` buffer for every V3 Pro
+> command, and none of them carry the `50 41` magic.
+> The V3 Pro speaks the classic Razer control report (the openrazer family,
+> "Device25") on this channel - for audio *and* lighting.
+> See [§5](#5-lighting-razer-device25-chroma---confirmed-from-synapses-own-code)
+> for the confirmed layout; the "PA" grammar below applies to the BlackShark
+> family only and is kept for reference.
 
 The only published Razer-**audio** frames come from `Ashesh3/razer-device-control`
 (a BlackShark headset). They establish the format you'll decode a Seiren capture
@@ -131,7 +142,101 @@ payload **after** the report ID.
 - **Don't guess bytes.** Replay only captured commands; a stray command class
   could hit a firmware/DFU path. Keep a Windows+Synapse box to recover.
 
-## 5. Sources
+## 5. Lighting (Razer "Device25" Chroma) - confirmed from Synapse's own code
+
+The V3 Pro has a **ring of 12 RGB LEDs** and full Chroma support
+(`isChromaDevice: true`, `isChromaStudioSupported: true` in Synapse's device data).
+None of this was captured over USB - it was recovered from Synapse 4's own
+artifacts, which is better than a capture because it includes the command
+*dictionary*, not just observed frames.
+Implementation: `Sources/SeirenKit/RazerLighting.swift` (codec) and
+`LightingController.swift` (HID transport); `swift run seiren-probe lighting`
+drives it from the CLI.
+
+### 5.1 Transport and report layout
+
+Same channel as §1: HID **interface 3**, **Feature report `0x07`**, opened
+non-exclusively.
+Synapse registers the mic with its lighting driver as
+`protocol: rzDevice25AudioCamyT3V2, write_function: hid.sendFeatureReportInBatch,
+claimInterface: 3, report_id: 7` ("Camy" is the V3 Pro's internal codename; the
+audio DLL names the device `CRzCamyAudioDevice`).
+
+The report body is **64 bytes** (65 on the wire with the report ID; the §1 table's
+"63 B" was a bad early read of the descriptor).
+Layout - the classic Razer control report, shortened from openrazer's 90 bytes:
+
+| Offset | Field | Notes |
+|---|---|---|
+| 0 | status | `0x00` on send; reply `0x02` = success, `0x01` busy, `0x03` failure, `0x04` timeout, `0x05` unsupported |
+| 1 | transaction id | echoed in the reply |
+| 2-3 | remaining packets | 0 |
+| 4 | protocol type | 0 |
+| 5 | data size | meaningful argument bytes |
+| 6 | command class | `0x00` device, `0x08` audio, `0x0F` Chroma |
+| 7 | command id | get = set \| `0x80` |
+| 8-61 | arguments | zero-padded |
+| 62 | crc | **XOR of bytes 0..61** - note this *includes* the transaction id, unlike openrazer's 90-byte report |
+| 63 | reserved | 0 |
+
+Replies are read back with GET_REPORT (Feature `0x07`), polling ~5 ms until the
+transaction id matches (Synapse polls up to ~10 times).
+
+### 5.2 Command dictionary (from Synapse's lighting-engine JS)
+
+Headers are `[data size, class, id]`:
+
+| Command | Header | Arguments |
+|---|---|---|
+| Get firmware version | `[0x02, 0x00, 0x81]` | reply `[major, minor]` |
+| Get serial number | `[0x16, 0x00, 0x82]` | reply = ASCII serial |
+| Set device mode | `[0x02, 0x00, 0x04]` | `[mode, 0]`; 0 = normal, 3 = driver (Synapse runs the mic in 3) |
+| Get device mode | `[0x02, 0x00, 0x84]` | |
+| **Set Chroma effect** | `[0x50, 0x0F, 0x02]` | `[profile, region, effect, flags, rate, nColors, r,g,b ...]`, size 6 + 3n |
+| **Set Chroma frame** (one row) | `[0x50, 0x0F, 0x03]` | `[profile, region, row, startCol, endCol, r,g,b ...]`, size 5 + 3n |
+| Set Chroma brightness | `[0x03, 0x0F, 0x04]` | `[profile, region, floor(pct / 100 * 255)]` |
+| Get Chroma brightness | `[0x03, 0x0F, 0x84]` | `[profile, region]` |
+| Set Audio Chroma display switch | `[0x03, 0x0F, 0x12]` | mic-specific (headphone / mic-gain / voice-activated / mute-effect modules) |
+| Set Chroma tap | `[0x04, 0x0F, 0x13]` | tap-to-mute Chroma behavior |
+
+Effect ids (`NEW_CHROMA_EFFECT_ID`): 0 Off, 1 Static, 2 Breathing, 3 Spectrum,
+4 Wave, 5 Reactive, 6 BasicRipple, 7 Starlight, **8 CustomFrame**, 9 Fire,
+10 AudioMeter, 11 Immersive, 12 Wheel.
+The device's own default (and Synapse's `quickEffectOnExit`) is **Spectrum**.
+
+Custom frames: upload the ring as row 0, columns 0..11
+(`Set Chroma frame`), then select effect 8 to display it.
+Synapse streams these at 25 fps for its software effects.
+
+### 5.3 LED geometry
+
+From Razer's public device manifest
+(`https://apps.razer.com/synapse/products/1422/mw/lighting-manifests/DeviceManifest_1422_0.json`):
+`DeviceMaxRow: 1, DeviceMaxCol: 12` - one logical row of 12 LEDs whose
+`MatrixPos` entries trace a circle in a 6×6 grid, i.e. the ring around the mic.
+
+### 5.4 Evidence trail
+
+- `lighting_driver.log`: the device.register JSON quoted in §5.1.
+- `products_1422_mw*.log`: 400+ full `dataSend` byte dumps (audio class `0x08`
+  plus `Set Device Mode`), which pin the 64-byte layout and the checksum rule.
+  `RazerLightingTests` replays four of them byte-for-byte.
+- Synapse's lighting-engine web app (public, apps.razer.com
+  `synapse/lighting-engine/static/js/`): the `rzDevice25AudioCamyT3V2` class
+  (`_createDataSend`, `_calculateChecksum`, `generateChromaFrameData`) and the
+  Chroma command/effect dictionaries in `main.*.js`.
+- The device manifest above for the LED layout.
+
+### 5.5 Verifying on hardware
+
+1. `swift run seiren-probe lighting` - read-only; the reported serial must match
+   the device sticker (Synapse logged `UC2618L08100451` for this unit).
+2. `swift run seiren-probe lighting static 00FF00` - the ring should turn green.
+3. If an effect command succeeds but nothing changes visually, try driver mode
+   first: `swift run seiren-probe lighting mode 3`, then the effect (Synapse
+   always runs the device in mode 3; mode 0 restores firmware control).
+
+## 6. Sources
 
 - openrazer report struct + CRC: <https://github.com/openrazer/openrazer/blob/master/driver/razercommon.c>
 - Razer audio "PA" frames + `setRemoteMode`: <https://github.com/Ashesh3/razer-device-control>

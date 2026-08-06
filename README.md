@@ -177,6 +177,7 @@ broadcast only.
 swift test                         # unit tests (SeirenKit)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls
+swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
 ## How it works
@@ -340,9 +341,12 @@ swift build
 
 **Next:**
 
-- [ ] **Lighting** — opportunistic. Still gated on a verified Windows Synapse USB
-      capture of the monitor-on bytes, and the V3 Pro may simply have no
-      addressable RGB.
+- [ ] **Lighting** - implemented, awaiting on-hardware verification. The V3 Pro
+      turns out to have a fully addressable 12-LED Chroma ring, and the whole
+      protocol was recovered from Synapse 4's own lighting engine - no USB
+      capture needed (see `docs/PROTOCOL.md` §5). The 🎙 menu has a **Lighting ▸**
+      submenu (Spectrum / Breathing / Wave / Static colors / Off + brightness);
+      `swift run seiren-probe lighting` drives it from the CLI.
 - [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
       virtual-device foundation (per-source levels into one broadcast bus).
 - [ ] **Notarization** — removes the one-time Gatekeeper bypass, but needs a paid
