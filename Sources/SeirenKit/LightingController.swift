@@ -160,9 +160,10 @@ public final class LightingSession {
             return nil
         }
 
-        // Poll for the echoed transaction id (~5 ms cadence, like Synapse,
-        // which retries up to 30 times).
-        for _ in 0..<20 {
+        // Poll for the echoed reply (~5 ms cadence, like Synapse, which
+        // retries up to 30 times). BUSY (0x01) means "still processing" -
+        // keep polling, it is not a rejection.
+        for _ in 0..<30 {
             usleep(5_000)
             var buf = [UInt8](repeating: 0, count: RazerReport.bodyLength + 1)
             var len = CFIndex(buf.count)
@@ -177,26 +178,42 @@ public final class LightingSession {
                 return nil
             }
             lastRead = Array(buf.prefix(max(0, min(Int(len), buf.count))))
-            if let reply = parseReply(from: buf, expecting: report.transactionId) {
+            if let reply = parseReply(from: buf, matching: report, framing: framing) {
+                if reply.status == RazerReport.ReplyStatus.busy.rawValue { continue }
                 return reply
             }
         }
         return nil
     }
 
-    /// Parse a GET_REPORT buffer, tolerating both ID-stripped and ID-prefixed
-    /// replies (the counterpart of the send-side ambiguity).
-    private func parseReply(from buf: [UInt8], expecting txn: UInt8)
-        -> RazerReport.Reply? {
-        for offset in [0, 1] {
+    /// Parse a GET_REPORT buffer into the reply for `report`, tolerating both
+    /// ID-stripped and ID-prefixed replies (the counterpart of the send-side
+    /// ambiguity). A real reply echoes our transaction id AND command
+    /// class/id, and carries a known status - anything else at a given offset
+    /// is a misparse, not a match (the report-ID byte 0x07 read at the wrong
+    /// offset can otherwise masquerade as a status).
+    private func parseReply(from buf: [UInt8], matching report: RazerReport,
+                            framing: Framing) -> RazerReport.Reply? {
+        // With an ID-prefixed send framing the reply is ID-prefixed too, so
+        // prefer that offset; keep the other as a fallback.
+        let offsets: [Int]
+        switch framing {
+        case .prefixed, .prefixedTrimmed: offsets = [1, 0]
+        case .bare, .bareTrimmed: offsets = [0, 1]
+        }
+        for offset in offsets {
             if offset == 1, buf.first != SeirenV3ProLighting.hidReportID { continue }
             var body = Array(buf.dropFirst(offset).prefix(RazerReport.bodyLength))
             if body.count < RazerReport.bodyLength {
                 body += [UInt8](repeating: 0, count: RazerReport.bodyLength - body.count)
             }
-            if let reply = RazerReport.Reply(body: body), reply.transactionId == txn {
-                return reply
-            }
+            guard let reply = RazerReport.Reply(body: body),
+                  reply.transactionId == report.transactionId,
+                  reply.commandClass == report.commandClass,
+                  reply.commandId == report.commandId,
+                  RazerReport.ReplyStatus(rawValue: reply.status) != nil
+            else { continue }
+            return reply
         }
         return nil
     }
