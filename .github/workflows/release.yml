@@ -96,6 +96,16 @@ jobs:
           SIGN_ID: ${{ steps.sign.outputs.sign_id }}
         run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
 
+      # Keep the signed build even if notarization times out or fails - the
+      # zip can then be notarized/stapled manually instead of rebuilding.
+      - name: Upload signed build as workflow artifact
+        if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-prenotarization
+          path: dist/Seiren-*.zip*
+          retention-days: 7
+
       - name: Notarize + staple
         if: steps.sign.outputs.signed == 'true'
         env:

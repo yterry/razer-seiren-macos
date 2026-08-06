@@ -42,9 +42,14 @@ done
 [[ -n "${SUB_ID}" ]] || { echo "==> giving up: could not submit"; exit 1; }
 echo "    submission id: ${SUB_ID}"
 
+# The very first submissions from a new Developer ID account go through extra
+# vetting at Apple and can sit "In Progress" for HOURS (observed: 40+ minutes
+# on this account's first two submissions). Default to a 3-hour window,
+# overridable via NOTARY_TIMEOUT_MINUTES.
+TIMEOUT_MINUTES="${NOTARY_TIMEOUT_MINUTES:-180}"
 STATUS="In Progress"
-for _ in $(seq 1 160); do   # up to ~40 minutes
-  sleep 15
+for _ in $(seq 1 $(( TIMEOUT_MINUTES * 2 ))); do   # one poll per 30s
+  sleep 30
   STATUS="$(xcrun notarytool info "${SUB_ID}" "${CRED[@]}" --output-format json \
     2>/dev/null | json_field status || true)"
   [[ -n "${STATUS}" ]] || STATUS="(network error - retrying)"
@@ -53,7 +58,10 @@ for _ in $(seq 1 160); do   # up to ~40 minutes
 done
 
 if [[ "${STATUS}" != "Accepted" ]]; then
-  echo "==> notarization did not succeed (status: ${STATUS}); the notary log:"
+  echo "==> notarization did not succeed (status: ${STATUS})"
+  echo "==> raw submission info:"
+  xcrun notarytool info "${SUB_ID}" "${CRED[@]}" || true
+  echo "==> the notary log (may not exist while still processing):"
   xcrun notarytool log "${SUB_ID}" "${CRED[@]}" || true
   exit 1
 fi
