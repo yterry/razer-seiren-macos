@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import IOKit.hid
 import SeirenKit
 
 // seiren-probe — read-only CoreAudio dump of a Razer Seiren's controls.
@@ -23,6 +24,7 @@ import SeirenKit
 // Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
 // needs Privacy → Input Monitoring the first time:
 //   swift run seiren-probe lighting            # read-only: firmware, serial, mode, brightness
+//   swift run seiren-probe lighting scan       # list Razer HID collections (no TCC needed)
 //   swift run seiren-probe lighting static 00FF00
 //   swift run seiren-probe lighting spectrum|breathing|wave|off
 //   swift run seiren-probe lighting frame FF0000,00FF00,...   # 1 or 12 colors
@@ -371,6 +373,13 @@ func runProcMon() {
 /// was recovered from Synapse 4's own lighting engine (docs/PROTOCOL.md §6);
 /// `lighting` with no arguments runs only read commands.
 func runLighting(_ args: [String]) {
+    // `scan` never opens a device (no TCC needed): list every Razer HID
+    // collection so we can see which one carries the 0xFF53 vendor channel.
+    if args.first?.lowercased() == "scan" {
+        runLightingScan()
+        return
+    }
+
     let session: LightingSession
     do {
         session = try LightingSession.openFirst()
@@ -454,6 +463,41 @@ func runLighting(_ args: [String]) {
     default:
         print("Unknown lighting command '\(cmd)'. See the header of this file for usage.")
         exit(1)
+    }
+}
+
+/// Property-only dump of every Razer HID collection-device. Safe to run any
+/// time; helps diagnose "device found but not replying" (wrong collection,
+/// unexpected report size, ...).
+func runLightingScan() {
+    let candidates = LightingSession.candidateDevices()
+    if candidates.isEmpty {
+        print("No Seiren HID device found. Plug it in and re-run.")
+        return
+    }
+    func prop(_ d: IOHIDDevice, _ key: String) -> Any? {
+        IOHIDDeviceGetProperty(d, key as CFString)
+    }
+    for (i, d) in candidates.enumerated() {
+        let product = prop(d, kIOHIDProductKey) as? String ?? "?"
+        let pid = prop(d, kIOHIDProductIDKey) as? Int ?? 0
+        let page = prop(d, kIOHIDPrimaryUsagePageKey) as? Int ?? 0
+        let usage = prop(d, kIOHIDPrimaryUsageKey) as? Int ?? 0
+        let maxFeature = prop(d, kIOHIDMaxFeatureReportSizeKey) as? Int ?? 0
+        let maxIn = prop(d, kIOHIDMaxInputReportSizeKey) as? Int ?? 0
+        let maxOut = prop(d, kIOHIDMaxOutputReportSizeKey) as? Int ?? 0
+        let vendor = LightingSession.carriesRazerChannel(d, usagePage: 0xFF53)
+        print(String(format: "[%d] %@ (pid 0x%04X)", i, product, pid))
+        print(String(format: "    primary usagePage 0x%04X usage 0x%02X%@",
+                     page, usage, vendor ? "   <-- Razer 0xFF53 channel" : ""))
+        if let pairs = prop(d, kIOHIDDeviceUsagePairsKey) as? [[String: Int]] {
+            let pretty = pairs.map {
+                String(format: "0x%04X/0x%02X",
+                       $0[kIOHIDDeviceUsagePageKey] ?? 0, $0[kIOHIDDeviceUsageKey] ?? 0)
+            }.joined(separator: ", ")
+            print("    usage pairs: \(pretty)")
+        }
+        print("    max report sizes: feature \(maxFeature), input \(maxIn), output \(maxOut)")
     }
 }
 

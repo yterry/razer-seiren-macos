@@ -26,11 +26,19 @@ public final class LightingSession {
     private let device: IOHIDDevice
     private var opened = false
     private var txn: UInt8 = 0
+    /// The feature-report payload size the device's descriptor declares. The
+    /// V3 Pro's Razer channel is 64 bytes; if a descriptor says 63 we drop the
+    /// trailing reserved byte (the CRC sits at offset 62, so nothing is lost).
+    private let reportSize: Int
 
     /// Wrap (and open) a HID device. Fails with `.permissionDenied` when Input
     /// Monitoring hasn't been granted to the calling binary.
     public init(device: IOHIDDevice) throws {
         self.device = device
+        let declared = IOHIDDeviceGetProperty(
+            device, kIOHIDMaxFeatureReportSizeKey as CFString) as? Int
+        reportSize = min(declared.flatMap { $0 > 0 ? $0 : nil } ?? RazerReport.bodyLength,
+                         RazerReport.bodyLength)
         let r = IOHIDDeviceOpen(device, 0)   // 0 = kIOHIDOptionsTypeNone
         guard r == kIOReturnSuccess || r == kIOReturnExclusiveAccess else {
             throw r == kIOReturnNotPermitted
@@ -41,23 +49,51 @@ public final class LightingSession {
 
     deinit { if opened { IOHIDDeviceClose(device, 0) } }
 
-    /// Find the first attached Seiren (by Razer VID + a registry PID) and open
-    /// a session to it. One-shot helper for CLI use; the menu-bar app uses
-    /// `LightingController` for hotplug tracking instead.
-    public static func openFirst(models: [DeviceModel] = DeviceRegistry.all()) throws -> LightingSession {
+    /// True when this HID device (collection) carries the Razer vendor channel.
+    /// macOS splits every top-level collection of the mic's HID interface into
+    /// its own IOHIDDevice (consumer keys, telephony, vendor ...); only the one
+    /// exposing usage page 0xFF53 accepts the control reports.
+    public static func carriesRazerChannel(_ device: IOHIDDevice, usagePage: Int) -> Bool {
+        if let pairs = IOHIDDeviceGetProperty(device, kIOHIDDeviceUsagePairsKey as CFString)
+            as? [[String: Int]] {
+            if pairs.contains(where: { $0[kIOHIDDeviceUsagePageKey] == usagePage }) {
+                return true
+            }
+        }
+        return (IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsagePageKey as CFString)
+                as? Int) == usagePage
+    }
+
+    /// All attached Razer HID collection-devices with a registry PID.
+    public static func candidateDevices(models: [DeviceModel] = DeviceRegistry.all())
+        -> [IOHIDDevice] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
         IOHIDManagerSetDeviceMatching(
             manager, [kIOHIDVendorIDKey: SeirenController.razerVendorID] as CFDictionary)
         // No IOHIDManagerOpen: enumeration works without it, and the TCC-gated
         // step is the per-device open inside `LightingSession.init`.
         guard let set = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
-            throw LightingError.noDevice
+            return []
         }
         let pids = Set(models.map { Int($0.pid) })
-        guard let device = set.first(where: {
+        return set.filter {
             let pid = IOHIDDeviceGetProperty($0, kIOHIDProductIDKey as CFString) as? Int
             return pid.map(pids.contains) ?? false
-        }) else { throw LightingError.noDevice }
+        }
+    }
+
+    /// Find the attached Seiren's **vendor-channel** collection and open a
+    /// session to it. One-shot helper for CLI use; the menu-bar app uses
+    /// `LightingController` for hotplug tracking instead.
+    public static func openFirst(models: [DeviceModel] = DeviceRegistry.all()) throws -> LightingSession {
+        let candidates = candidateDevices(models: models)
+        guard !candidates.isEmpty else { throw LightingError.noDevice }
+        let pages = Set(models.map { Int($0.hidUsagePage) })
+        // Strongly prefer the collection that declares the Razer vendor usage
+        // page; fall back to any candidate only if none does.
+        let device = candidates.first(where: { d in
+            pages.contains(where: { carriesRazerChannel(d, usagePage: $0) })
+        }) ?? candidates[0]
         return try LightingSession(device: device)
     }
 
@@ -70,9 +106,11 @@ public final class LightingSession {
     @discardableResult
     public func send(_ make: (UInt8) -> RazerReport) throws -> RazerReport.Reply {
         let report = make(nextTxn())
-        let body = report.encoded()
         // Per HID convention on macOS the buffer excludes the report ID; it is
         // passed separately. (hidapi does exactly this for numbered reports.)
+        // Truncate to the descriptor's report size when it is smaller than our
+        // 64-byte body - only the reserved padding byte can be affected.
+        let body = Array(report.encoded().prefix(reportSize))
         let r = body.withUnsafeBufferPointer {
             IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature,
                                  CFIndex(SeirenV3ProLighting.hidReportID),
@@ -86,7 +124,7 @@ public final class LightingSession {
         // Poll for the echoed transaction id (~5 ms cadence, like Synapse).
         for _ in 0..<10 {
             usleep(5_000)
-            var buf = [UInt8](repeating: 0, count: RazerReport.bodyLength)
+            var buf = [UInt8](repeating: 0, count: reportSize)
             var len = CFIndex(buf.count)
             let g = buf.withUnsafeMutableBufferPointer {
                 IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature,
@@ -94,7 +132,9 @@ public final class LightingSession {
                                      $0.baseAddress!, &len)
             }
             guard g == kIOReturnSuccess else { throw LightingError.io(g) }
-            guard let reply = RazerReport.Reply(body: buf),
+            // Re-pad so the reply parser always sees a full 64-byte body.
+            let full = buf + [UInt8](repeating: 0, count: RazerReport.bodyLength - buf.count)
+            guard let reply = RazerReport.Reply(body: full),
                   reply.transactionId == report.transactionId else { continue }
             guard reply.isSuccess else { throw LightingError.deviceRejected(reply.status) }
             return reply
@@ -180,10 +220,12 @@ public final class LightingController {
 
     private let manager: IOHIDManager
     private let pids: Set<Int>
+    private let usagePages: Set<Int>
     private var currentDevice: IOHIDDevice?
 
     public init(models: [DeviceModel] = DeviceRegistry.all()) {
         pids = Set(models.map { Int($0.pid) })
+        usagePages = Set(models.map { Int($0.hidUsagePage) })
         manager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
     }
 
@@ -218,7 +260,13 @@ public final class LightingController {
 
     private func attached(_ device: IOHIDDevice) {
         guard let pid = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int,
-              pids.contains(pid) else { return }
+              pids.contains(pid),
+              // Each top-level HID collection arrives as its own device; only
+              // the Razer vendor-channel collection takes control reports.
+              usagePages.contains(where: {
+                  LightingSession.carriesRazerChannel(device, usagePage: $0)
+              })
+        else { return }
         currentDevice = device
         deviceConnected = true
         assertDesiredState()
