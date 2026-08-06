@@ -338,15 +338,14 @@ swift build
 - [x] **Noise suppression** — a zero-latency C gate, plus opt-in RNNoise **"Studio"** neural denoise
 - [x] **Seiren FX** virtual device — other apps record the *processed* voice (OBS / Zoom / Discord)
 - [x] **Homebrew** distribution — `brew install --cask razer-seiren`
+- [x] **Lighting** - the V3 Pro's 12-LED Chroma ring, driven natively over the
+      vendor HID channel (protocol recovered from Synapse 4's own lighting
+      engine - `docs/PROTOCOL.md` §5 - and verified on hardware). **🎙 →
+      Lighting ▸**: Spectrum / Breathing / Wave / Static colors / Off +
+      brightness; `swift run seiren-probe lighting` from the CLI.
 
 **Next:**
 
-- [ ] **Lighting** - implemented, awaiting on-hardware verification. The V3 Pro
-      turns out to have a fully addressable 12-LED Chroma ring, and the whole
-      protocol was recovered from Synapse 4's own lighting engine - no USB
-      capture needed (see `docs/PROTOCOL.md` §5). The 🎙 menu has a **Lighting ▸**
-      submenu (Spectrum / Breathing / Wave / Static colors / Off + brightness);
-      `swift run seiren-probe lighting` drives it from the CLI.
 - [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
       virtual-device foundation (per-source levels into one broadcast bus).
 - [ ] **Notarization** — removes the one-time Gatekeeper bypass, but needs a paid

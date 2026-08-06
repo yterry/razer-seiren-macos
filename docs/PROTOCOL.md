@@ -253,6 +253,8 @@ From Razer's public device manifest
    brightness read back the value Synapse had last written - the full report
    stack (framing, checksum, reply parsing) is confirmed end to end.
 2. `swift run seiren-probe lighting static 00FF00` - the ring should turn green.
+   **✓ Verified 2026-08-05**: static and spectrum both visibly change the ring
+   (in device mode 0 - no driver-mode prerequisite for hardware effects).
 3. If an effect command succeeds but nothing changes visually, try driver mode
    first: `swift run seiren-probe lighting mode 3`, then the effect (Synapse
    always runs the device in mode 3; mode 0 restores firmware control).

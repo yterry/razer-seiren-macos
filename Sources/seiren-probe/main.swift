@@ -532,6 +532,18 @@ if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "l
     exit(0)
 }
 
+// Catch a lighting subcommand typed without the `lighting` prefix — otherwise
+// it would silently fall through to the CoreAudio dump, which is baffling.
+let lightingSubcommands: Set<String> = ["info", "scan", "static", "off", "spectrum",
+                                        "breathing", "wave", "fire", "wheel",
+                                        "frame", "brightness", "mode"]
+if CommandLine.arguments.count >= 2,
+   lightingSubcommands.contains(CommandLine.arguments[1].lowercased()) {
+    let rest = CommandLine.arguments.dropFirst(1).joined(separator: " ")
+    print("Did you mean: swift run seiren-probe lighting \(rest)")
+    exit(1)
+}
+
 let devices = objectIDs(system, address(kAudioHardwarePropertyDevices))
 print("Found \(devices.count) audio devices.")
 
