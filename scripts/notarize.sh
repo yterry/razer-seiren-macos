@@ -29,8 +29,13 @@ json_field() { python3 -c "import json,sys; print(json.load(sys.stdin).get('$1',
 SUB_ID=""
 for attempt in 1 2 3; do
   echo "==> submitting to Apple notary service (attempt ${attempt})"
-  SUB_ID="$(xcrun notarytool submit "${ZIP}" "${CRED[@]}" --output-format json \
-    | json_field id)" && [[ -n "${SUB_ID}" ]] && break
+  # (a failing submit here is retried, not fatal - the non-final position in
+  # an if-condition is exempt from set -e, and the if makes that explicit)
+  if SUB_ID="$(xcrun notarytool submit "${ZIP}" "${CRED[@]}" --output-format json \
+      | json_field id)" && [[ -n "${SUB_ID}" ]]; then
+    break
+  fi
+  SUB_ID=""
   echo "    submit failed; retrying in 30s"
   sleep 30
 done
