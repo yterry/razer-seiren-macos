@@ -397,12 +397,25 @@ func runLighting(_ args: [String]) {
         exit(1)
     }
 
+    func diagnostics() {
+        if let f = session.framing {
+            print("(framing: \(f.rawValue))")
+        } else {
+            print("(no framing candidate got a reply; last GET_REPORT bytes:)")
+            let hex = session.lastRead.prefix(16)
+                .map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("  \(hex.isEmpty ? "(nothing read)" : hex) ...")
+        }
+    }
+
     func run(_ what: String, _ body: () throws -> Void) {
         do {
             try body()
             print("\(what): ok")
+            diagnostics()
         } catch {
             print("\(what): FAILED — \(error)")
+            diagnostics()
             exit(1)
         }
     }
@@ -416,9 +429,11 @@ func runLighting(_ args: [String]) {
             print("Serial:     \(info.serial)")
             print("Mode:       \(info.mode) (0 = normal, 3 = driver)")
             print("Brightness: \(info.brightnessPercent.map { "\($0)%" } ?? "n/a")")
+            diagnostics()
         } catch {
             print("Probe failed: \(error)")
             print("(If this is the first run, check Input Monitoring permission.)")
+            diagnostics()
             exit(1)
         }
 

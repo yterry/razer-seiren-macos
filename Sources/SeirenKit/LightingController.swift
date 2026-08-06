@@ -23,22 +23,43 @@ public enum LightingError: Error, Equatable {
 ///  2. GET_REPORT(Feature 0x07) polled until the reply echoes our transaction
 ///     id (Synapse polls every ~5 ms, up to ~10 times).
 public final class LightingSession {
+    /// How the 64-byte body is framed for `IOHIDDeviceSetReport`. macOS is
+    /// genuinely ambiguous here: the HID spec says a control transfer's data
+    /// stage excludes the report ID, but hidapi's macOS backend passes numbered
+    /// reports **with** the ID as byte 0 - and whether the descriptor's
+    /// declared 64 bytes include the ID decides if the body must shrink to 63.
+    /// Rather than bake in one guess, the first command self-calibrates: each
+    /// candidate is tried until the device echoes a valid reply, and the winner
+    /// sticks for the rest of the session.
+    public enum Framing: String, CaseIterable, Sendable {
+        case bare = "64-byte body, no report-ID prefix"
+        case prefixed = "report ID + 64-byte body"
+        case prefixedTrimmed = "report ID + 63-byte body"
+        case bareTrimmed = "63-byte body, no report-ID prefix"
+
+        func wireBytes(for body: [UInt8]) -> [UInt8] {
+            switch self {
+            case .bare: return body
+            case .prefixed: return [SeirenV3ProLighting.hidReportID] + body
+            case .prefixedTrimmed:
+                return [SeirenV3ProLighting.hidReportID] + body.dropLast()
+            case .bareTrimmed: return Array(body.dropLast())
+            }
+        }
+    }
+
     private let device: IOHIDDevice
     private var opened = false
     private var txn: UInt8 = 0
-    /// The feature-report payload size the device's descriptor declares. The
-    /// V3 Pro's Razer channel is 64 bytes; if a descriptor says 63 we drop the
-    /// trailing reserved byte (the CRC sits at offset 62, so nothing is lost).
-    private let reportSize: Int
+    /// Resolved by the first successful exchange; nil while uncalibrated.
+    public private(set) var framing: Framing?
+    /// Raw bytes of the most recent GET_REPORT, for diagnostics on failure.
+    public private(set) var lastRead: [UInt8] = []
 
     /// Wrap (and open) a HID device. Fails with `.permissionDenied` when Input
     /// Monitoring hasn't been granted to the calling binary.
     public init(device: IOHIDDevice) throws {
         self.device = device
-        let declared = IOHIDDeviceGetProperty(
-            device, kIOHIDMaxFeatureReportSizeKey as CFString) as? Int
-        reportSize = min(declared.flatMap { $0 > 0 ? $0 : nil } ?? RazerReport.bodyLength,
-                         RazerReport.bodyLength)
         let r = IOHIDDeviceOpen(device, 0)   // 0 = kIOHIDOptionsTypeNone
         guard r == kIOReturnSuccess || r == kIOReturnExclusiveAccess else {
             throw r == kIOReturnNotPermitted
@@ -102,44 +123,82 @@ public final class LightingSession {
         return txn
     }
 
-    /// Send one command and wait for the device's reply.
+    /// Send one command and wait for the device's reply. The first command
+    /// tries each `Framing` candidate until the device answers; later commands
+    /// reuse the winner.
     @discardableResult
     public func send(_ make: (UInt8) -> RazerReport) throws -> RazerReport.Reply {
         let report = make(nextTxn())
-        // Per HID convention on macOS the buffer excludes the report ID; it is
-        // passed separately. (hidapi does exactly this for numbered reports.)
-        // Truncate to the descriptor's report size when it is smaller than our
-        // 64-byte body - only the reserved padding byte can be affected.
-        let body = Array(report.encoded().prefix(reportSize))
-        let r = body.withUnsafeBufferPointer {
+        let candidates = framing.map { [$0] } ?? Framing.allCases
+        for candidate in candidates {
+            if let reply = try attempt(report, using: candidate) {
+                framing = candidate
+                guard reply.isSuccess else {
+                    throw LightingError.deviceRejected(reply.status)
+                }
+                return reply
+            }
+        }
+        throw LightingError.noReply
+    }
+
+    /// One SET_REPORT + reply-poll round with a specific framing. Returns nil
+    /// when the device stays silent (so calibration can move on); throws only
+    /// for hard errors.
+    private func attempt(_ report: RazerReport, using framing: Framing) throws
+        -> RazerReport.Reply? {
+        let wire = framing.wireBytes(for: report.encoded())
+        let r = wire.withUnsafeBufferPointer {
             IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature,
                                  CFIndex(SeirenV3ProLighting.hidReportID),
-                                 $0.baseAddress!, body.count)
+                                 $0.baseAddress!, wire.count)
         }
+        if r == kIOReturnNotPermitted { throw LightingError.permissionDenied }
+        // A size the kernel rejects just disqualifies this framing candidate.
         guard r == kIOReturnSuccess else {
-            throw r == kIOReturnNotPermitted
-                ? LightingError.permissionDenied : LightingError.io(r)
+            if self.framing != nil { throw LightingError.io(r) }
+            return nil
         }
 
-        // Poll for the echoed transaction id (~5 ms cadence, like Synapse).
-        for _ in 0..<10 {
+        // Poll for the echoed transaction id (~5 ms cadence, like Synapse,
+        // which retries up to 30 times).
+        for _ in 0..<20 {
             usleep(5_000)
-            var buf = [UInt8](repeating: 0, count: reportSize)
+            var buf = [UInt8](repeating: 0, count: RazerReport.bodyLength + 1)
             var len = CFIndex(buf.count)
             let g = buf.withUnsafeMutableBufferPointer {
                 IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature,
                                      CFIndex(SeirenV3ProLighting.hidReportID),
                                      $0.baseAddress!, &len)
             }
-            guard g == kIOReturnSuccess else { throw LightingError.io(g) }
-            // Re-pad so the reply parser always sees a full 64-byte body.
-            let full = buf + [UInt8](repeating: 0, count: RazerReport.bodyLength - buf.count)
-            guard let reply = RazerReport.Reply(body: full),
-                  reply.transactionId == report.transactionId else { continue }
-            guard reply.isSuccess else { throw LightingError.deviceRejected(reply.status) }
-            return reply
+            if g == kIOReturnNotPermitted { throw LightingError.permissionDenied }
+            guard g == kIOReturnSuccess else {
+                if self.framing != nil { throw LightingError.io(g) }
+                return nil
+            }
+            lastRead = Array(buf.prefix(max(0, min(Int(len), buf.count))))
+            if let reply = parseReply(from: buf, expecting: report.transactionId) {
+                return reply
+            }
         }
-        throw LightingError.noReply
+        return nil
+    }
+
+    /// Parse a GET_REPORT buffer, tolerating both ID-stripped and ID-prefixed
+    /// replies (the counterpart of the send-side ambiguity).
+    private func parseReply(from buf: [UInt8], expecting txn: UInt8)
+        -> RazerReport.Reply? {
+        for offset in [0, 1] {
+            if offset == 1, buf.first != SeirenV3ProLighting.hidReportID { continue }
+            var body = Array(buf.dropFirst(offset).prefix(RazerReport.bodyLength))
+            if body.count < RazerReport.bodyLength {
+                body += [UInt8](repeating: 0, count: RazerReport.bodyLength - body.count)
+            }
+            if let reply = RazerReport.Reply(body: body), reply.transactionId == txn {
+                return reply
+            }
+        }
+        return nil
     }
 
     // MARK: High-level commands
