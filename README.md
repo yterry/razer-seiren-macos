@@ -374,14 +374,14 @@ swift build
       engine - `docs/PROTOCOL.md` §5 - and verified on hardware). **🎙 →
       Lighting ▸**: Spectrum / Breathing / Wave / Static colors / Off +
       brightness; `swift run seiren-probe lighting` from the CLI.
+- [x] **Notarization** - releases from v1.1.0 are Developer-ID-signed,
+      notarized, and stapled by the release pipeline; Gatekeeper opens them
+      with no bypass (`spctl` verified: "Notarized Developer ID").
 
 **Next:**
 
 - [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
       virtual-device foundation (per-source levels into one broadcast bus).
-- [ ] **Notarization** - Developer ID in hand and the release pipeline signs,
-      notarizes, and staples when the signing secrets are configured; flips to
-      shipped with the v1.1.0 release.
 
 See [`docs/CREATOR_DESIGN.md`](docs/CREATOR_DESIGN.md) for the full design.
 
