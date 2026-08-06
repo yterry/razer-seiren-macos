@@ -1,5 +1,7 @@
 import CoreAudio
 import Foundation
+import IOKit.hid
+import SeirenKit
 
 // seiren-probe — read-only CoreAudio dump of a Razer Seiren's controls.
 //
@@ -18,6 +20,16 @@ import Foundation
 //   swift run seiren-probe monitor hold 0.9 # start device + enable, hold until Return
 //   swift run seiren-probe monitor swmon 0.9 # software monitor (mic->headphone), hold
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
+//
+// Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
+// needs Privacy → Input Monitoring the first time:
+//   swift run seiren-probe lighting            # read-only: firmware, serial, mode, brightness
+//   swift run seiren-probe lighting scan       # list Razer HID collections (no TCC needed)
+//   swift run seiren-probe lighting static 00FF00
+//   swift run seiren-probe lighting spectrum|breathing|wave|off
+//   swift run seiren-probe lighting frame FF0000,00FF00,...   # 1 or 12 colors
+//   swift run seiren-probe lighting brightness 80             # percent
+//   swift run seiren-probe lighting mode 0|3                  # device mode (3 = driver)
 
 // MARK: - helpers
 
@@ -355,6 +367,155 @@ func runProcMon() {
     }
 }
 
+// MARK: - lighting (vendor HID)
+
+/// Drive the Seiren's Chroma lighting over the vendor HID channel. The protocol
+/// was recovered from Synapse 4's own lighting engine (docs/PROTOCOL.md §6);
+/// `lighting` with no arguments runs only read commands.
+func runLighting(_ args: [String]) {
+    // `scan` never opens a device (no TCC needed): list every Razer HID
+    // collection so we can see which one carries the 0xFF53 vendor channel.
+    if args.first?.lowercased() == "scan" {
+        runLightingScan()
+        return
+    }
+
+    let session: LightingSession
+    do {
+        session = try LightingSession.openFirst()
+    } catch LightingError.permissionDenied {
+        print("""
+        HID access denied (TCC). Grant your terminal app Input Monitoring under
+        System Settings → Privacy & Security → Input Monitoring, then re-run.
+        """)
+        exit(1)
+    } catch LightingError.noDevice {
+        print("No Seiren found on USB. Plug it in and re-run.")
+        exit(1)
+    } catch {
+        print("Could not open the Seiren's HID interface: \(error)")
+        exit(1)
+    }
+
+    func diagnostics() {
+        if let f = session.framing {
+            print("(framing: \(f.rawValue))")
+        } else {
+            print("(no framing candidate got a reply; last GET_REPORT bytes:)")
+            let hex = session.lastRead.prefix(16)
+                .map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("  \(hex.isEmpty ? "(nothing read)" : hex) ...")
+        }
+    }
+
+    func run(_ what: String, _ body: () throws -> Void) {
+        do {
+            try body()
+            print("\(what): ok")
+            diagnostics()
+        } catch {
+            print("\(what): FAILED — \(error)")
+            diagnostics()
+            exit(1)
+        }
+    }
+
+    let cmd = args.first?.lowercased() ?? "info"
+    switch cmd {
+    case "info":
+        do {
+            let info = try session.probe()
+            print("Firmware:   \(info.firmware)")
+            print("Serial:     \(info.serial)")
+            print("Mode:       \(info.mode) (0 = normal, 3 = driver)")
+            print("Brightness: \(info.brightnessPercent.map { "\($0)%" } ?? "n/a")")
+            diagnostics()
+        } catch {
+            print("Probe failed: \(error)")
+            print("(If this is the first run, check Input Monitoring permission.)")
+            diagnostics()
+            exit(1)
+        }
+
+    case "static":
+        guard args.count >= 2, let color = RGB(hex: args[1]) else {
+            print("Usage: lighting static RRGGBB"); exit(1)
+        }
+        run("static \(color.hex)") { try session.setEffect(.static, colors: [color]) }
+
+    case "off", "spectrum", "breathing", "wave", "fire", "wheel":
+        let effect: ChromaEffect = [
+            "off": .off, "spectrum": .spectrum, "breathing": .breathing,
+            "wave": .wave, "fire": .fire, "wheel": .wheel,
+        ][cmd]!
+        run(cmd) { try session.setEffect(effect) }
+
+    case "frame":
+        guard args.count >= 2 else {
+            print("Usage: lighting frame RRGGBB[,RRGGBB × 12]"); exit(1)
+        }
+        var colors = args[1].split(separator: ",").compactMap { RGB(hex: String($0)) }
+        if colors.count == 1 {
+            colors = Array(repeating: colors[0], count: SeirenV3ProLighting.ledCount)
+        }
+        guard colors.count == SeirenV3ProLighting.ledCount else {
+            print("Need 1 or \(SeirenV3ProLighting.ledCount) colors."); exit(1)
+        }
+        run("frame") { try session.showFrame(colors) }
+
+    case "brightness":
+        guard args.count >= 2, let pct = Int(args[1]) else {
+            print("Usage: lighting brightness 0-100"); exit(1)
+        }
+        run("brightness \(pct)%") { try session.setBrightness(percent: pct) }
+
+    case "mode":
+        guard args.count >= 2, let mode = UInt8(args[1]), mode == 0 || mode == 3 else {
+            print("Usage: lighting mode 0|3"); exit(1)
+        }
+        run("device mode \(mode)") { try session.setDeviceMode(mode) }
+
+    default:
+        print("Unknown lighting command '\(cmd)'. See the header of this file for usage.")
+        exit(1)
+    }
+}
+
+/// Property-only dump of every Razer HID collection-device. Safe to run any
+/// time; helps diagnose "device found but not replying" (wrong collection,
+/// unexpected report size, ...).
+func runLightingScan() {
+    let candidates = LightingSession.candidateDevices()
+    if candidates.isEmpty {
+        print("No Seiren HID device found. Plug it in and re-run.")
+        return
+    }
+    func prop(_ d: IOHIDDevice, _ key: String) -> Any? {
+        IOHIDDeviceGetProperty(d, key as CFString)
+    }
+    for (i, d) in candidates.enumerated() {
+        let product = prop(d, kIOHIDProductKey) as? String ?? "?"
+        let pid = prop(d, kIOHIDProductIDKey) as? Int ?? 0
+        let page = prop(d, kIOHIDPrimaryUsagePageKey) as? Int ?? 0
+        let usage = prop(d, kIOHIDPrimaryUsageKey) as? Int ?? 0
+        let maxFeature = prop(d, kIOHIDMaxFeatureReportSizeKey) as? Int ?? 0
+        let maxIn = prop(d, kIOHIDMaxInputReportSizeKey) as? Int ?? 0
+        let maxOut = prop(d, kIOHIDMaxOutputReportSizeKey) as? Int ?? 0
+        let vendor = LightingSession.carriesRazerChannel(d, usagePage: 0xFF53)
+        print(String(format: "[%d] %@ (pid 0x%04X)", i, product, pid))
+        print(String(format: "    primary usagePage 0x%04X usage 0x%02X%@",
+                     page, usage, vendor ? "   <-- Razer 0xFF53 channel" : ""))
+        if let pairs = prop(d, kIOHIDDeviceUsagePairsKey) as? [[String: Int]] {
+            let pretty = pairs.map {
+                String(format: "0x%04X/0x%02X",
+                       $0[kIOHIDDeviceUsagePageKey] ?? 0, $0[kIOHIDDeviceUsageKey] ?? 0)
+            }.joined(separator: ", ")
+            print("    usage pairs: \(pretty)")
+        }
+        print("    max report sizes: feature \(maxFeature), input \(maxIn), output \(maxOut)")
+    }
+}
+
 // MARK: - main
 
 let system = AudioObjectID(kAudioObjectSystemObject)
@@ -363,6 +524,24 @@ let system = AudioObjectID(kAudioObjectSystemObject)
 if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "procmon" {
     runProcMon()
     exit(0)
+}
+
+// `lighting` talks HID, not CoreAudio — handle it before the audio device lookup.
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "lighting" {
+    runLighting(Array(CommandLine.arguments.dropFirst(2)))
+    exit(0)
+}
+
+// Catch a lighting subcommand typed without the `lighting` prefix — otherwise
+// it would silently fall through to the CoreAudio dump, which is baffling.
+let lightingSubcommands: Set<String> = ["info", "scan", "static", "off", "spectrum",
+                                        "breathing", "wave", "fire", "wheel",
+                                        "frame", "brightness", "mode"]
+if CommandLine.arguments.count >= 2,
+   lightingSubcommands.contains(CommandLine.arguments[1].lowercased()) {
+    let rest = CommandLine.arguments.dropFirst(1).joined(separator: " ")
+    print("Did you mean: swift run seiren-probe lighting \(rest)")
+    exit(1)
 }
 
 let devices = objectIDs(system, address(kAudioHardwarePropertyDevices))

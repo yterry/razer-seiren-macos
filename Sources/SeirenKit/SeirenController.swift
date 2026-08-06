@@ -122,9 +122,10 @@ public final class SeirenController {
     private func send(_ frame: CommandFrame, to device: IOHIDDevice) -> ApplyResult {
         let reportType: IOHIDReportType = (frame.type == .feature)
             ? kIOHIDReportTypeFeature : kIOHIDReportTypeOutput
-        // hidapi convention: buffer carries the report ID as byte 0 for numbered reports.
-        var buf: [UInt8] = [frame.reportID]
-        buf.append(contentsOf: frame.bytes)
+        // IOHIDDeviceSetReport takes the report ID as an argument and the
+        // buffer holds only the payload (hidapi strips the leading ID byte the
+        // same way before calling IOKit).
+        let buf = frame.bytes
         let r = IOHIDDeviceSetReport(device, reportType, CFIndex(frame.reportID), buf, buf.count)
         switch r {
         case kIOReturnSuccess:      return .ok

@@ -177,6 +177,7 @@ broadcast only.
 swift test                         # unit tests (SeirenKit)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls
+swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
 ## How it works
@@ -337,12 +338,14 @@ swift build
 - [x] **Noise suppression** — a zero-latency C gate, plus opt-in RNNoise **"Studio"** neural denoise
 - [x] **Seiren FX** virtual device — other apps record the *processed* voice (OBS / Zoom / Discord)
 - [x] **Homebrew** distribution — `brew install --cask razer-seiren`
+- [x] **Lighting** - the V3 Pro's 12-LED Chroma ring, driven natively over the
+      vendor HID channel (protocol recovered from Synapse 4's own lighting
+      engine - `docs/PROTOCOL.md` §5 - and verified on hardware). **🎙 →
+      Lighting ▸**: Spectrum / Breathing / Wave / Static colors / Off +
+      brightness; `swift run seiren-probe lighting` from the CLI.
 
 **Next:**
 
-- [ ] **Lighting** — opportunistic. Still gated on a verified Windows Synapse USB
-      capture of the monitor-on bytes, and the V3 Pro may simply have no
-      addressable RGB.
 - [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
       virtual-device foundation (per-source levels into one broadcast bus).
 - [ ] **Notarization** — removes the one-time Gatekeeper bypass, but needs a paid
