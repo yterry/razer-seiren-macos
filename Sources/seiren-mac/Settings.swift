@@ -23,8 +23,9 @@ final class Settings {
     }
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
-    /// v3 = lighting keys (absence = "never touched the lights").
-    static let currentSchema = 3
+    /// v3 = lighting keys (absence = "never touched the lights");
+    /// v4 = brand-green -> LED-green fixup.
+    static let currentSchema = 4
 
     init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -46,6 +47,15 @@ final class Settings {
         // is nothing to migrate — just record the new schema version.
         // v2 → v3: lighting keys added; absence means "leave the device's
         // lighting alone", so again nothing to migrate.
+
+        if from < 4 {
+            // v3 → v4: the palette's "Razer Green" briefly stored the brand
+            // hex 44D62C, which renders washed-out on the LEDs; rewrite it to
+            // the LED green the palette now sends.
+            if defaults.string(forKey: Key.lightColor)?.uppercased() == "44D62C" {
+                defaults.set("00FF00", forKey: Key.lightColor)
+            }
+        }
 
         defaults.set(Self.currentSchema, forKey: Key.schemaVersion)
     }

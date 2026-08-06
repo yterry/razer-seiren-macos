@@ -364,7 +364,8 @@ public final class LightingController {
         guard let device = currentDevice else { lastError = .noDevice; notify(); return }
         do {
             let session = try LightingSession(device: device)
-            try session.setBrightness(percent: state.brightnessPercent)
+            // Effect first - it is the visible change; a brightness hiccup
+            // afterwards must not leave the ring stuck in the previous effect.
             switch state.effect {
             case .static:
                 try session.setEffect(.static, colors: state.color.map { [$0] } ?? [RGB(0, 255, 0)])
@@ -373,6 +374,7 @@ public final class LightingController {
             default:
                 try session.setEffect(state.effect)
             }
+            try session.setBrightness(percent: state.brightnessPercent)
             lastError = nil
         } catch let e as LightingError {
             lastError = e

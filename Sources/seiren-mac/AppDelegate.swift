@@ -22,8 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var levelSlider: NSSlider?
 
     /// Static color choices for the Lighting menu (name, hex).
+    ///
+    /// These are LED colors, not screen colors: the ring drives raw RGB
+    /// emitters with no color management, so Razer's *brand* green (#44D62C,
+    /// an sRGB value for displays) renders washed-out and dim there. The
+    /// iconic Razer glow on the hardware itself is pure green - the same
+    /// 00FF00 Synapse and openrazer use.
     private static let lightingPalette: [(String, String)] = [
-        ("Razer Green", "44D62C"), ("White", "FFFFFF"), ("Red", "FF0000"),
+        ("Razer Green", "00FF00"), ("White", "FFFFFF"), ("Red", "FF0000"),
         ("Orange", "FF6A00"), ("Yellow", "FFD400"), ("Cyan", "00FFFF"),
         ("Blue", "0066FF"), ("Purple", "8A2BE2"), ("Pink", "FF1493"),
     ]
