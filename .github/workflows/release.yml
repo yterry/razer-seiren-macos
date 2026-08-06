@@ -46,12 +46,28 @@ jobs:
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          HAVE_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAVE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          HAVE_NOTARY_PW: ${{ secrets.NOTARY_PASSWORD != '' }}
         run: |
           set -euo pipefail
           if [ -z "${CERT_P12}" ]; then
             echo "No MACOS_CERT_P12 secret - packaging ad-hoc (unsigned)."
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # Signing is all-or-nothing: once the certificate is present, a
+          # missing companion secret fails HERE, loudly - not halfway through
+          # the run, and never by silently publishing an unsigned build under
+          # a version the README documents as signed and notarized.
+          missing=""
+          [ -n "${CERT_PASSWORD}" ]        || missing="${missing} MACOS_CERT_PASSWORD"
+          [ "${HAVE_APPLE_ID}" = "true" ]  || missing="${missing} APPLE_ID"
+          [ "${HAVE_TEAM_ID}" = "true" ]   || missing="${missing} APPLE_TEAM_ID"
+          [ "${HAVE_NOTARY_PW}" = "true" ] || missing="${missing} NOTARY_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::error::MACOS_CERT_P12 is set, but these secrets are missing:${missing}. Add them - or remove MACOS_CERT_P12 to intentionally release unsigned."
+            exit 1
           fi
           KEYCHAIN_PW="$(uuidgen)"
           security create-keychain -p "${KEYCHAIN_PW}" build.keychain

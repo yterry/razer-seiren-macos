@@ -53,9 +53,10 @@ brew update && brew upgrade --cask razer-seiren
 ```
 
 Releases from **v1.1.0** on are **signed with an Apple Developer ID and
-notarized**, so the app opens with no Gatekeeper friction at all. (Installing
-the older v1.0.0? That build predates the Developer ID - the cask clears its
-Gatekeeper quarantine flag for you, so it still launches with no manual bypass.)
+notarized**, so the app opens with no Gatekeeper friction at all - each
+release's notes state its signing status. (Installing the older v1.0.0? That
+build predates the Developer ID - the cask clears its Gatekeeper quarantine
+flag for you, so it still launches with no manual bypass.)
 
 > The `brew trust` line is a one-time approval for a third-party tap — Homebrew 6+
 > requires it for any tap outside the official repos (older Homebrew ignores it
