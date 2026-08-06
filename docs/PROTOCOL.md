@@ -53,10 +53,12 @@ lighting). 64 payload bytes + 1 report-ID byte = 65 on the wire; the body layout
 is the "Device25" report in §5. Fallbacks if a capture says otherwise:
 `0x55`/`0xFF90` (Output) or `0x41`/`0xFF82` (Output).
 
-The macOS send is simply:
+The macOS send (confirmed on hardware - see §5.1) passes the buffer **with the
+report ID as byte 0**, hidapi-style:
 
 ```
-IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, /*reportID*/ 0x07, payload64, 64)
+buffer = [0x07] + body64            // 65 bytes total
+IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, /*reportID*/ 0x07, buffer, 65)
 ```
 
 ## 2. Razer audio command grammar
@@ -182,6 +184,22 @@ Layout - the classic Razer control report, shortened from openrazer's 90 bytes:
 Replies are read back with GET_REPORT (Feature `0x07`), polling ~5 ms until the
 transaction id matches (Synapse polls up to ~10 times).
 
+**macOS transport specifics - confirmed on a real V3 Pro (2026-08-05, by a
+serial-number round-trip):**
+
+- `IOHIDDeviceSetReport` wants the buffer **with the report ID prefixed**
+  (65 bytes: `0x07` + the 64-byte body), matching hidapi's numbered-report
+  convention - a bare 64-byte body is silently ignored by the firmware.
+- `IOHIDDeviceGetReport` likewise returns the reply **ID-prefixed**; parse the
+  body from offset 1.
+- A reply with status `0x01` (BUSY) means "still processing" - keep polling
+  (~5 ms cadence; the reply echoes the transaction id and command class/id,
+  which is also how a real reply is told apart from stale buffer content).
+- The interface-3 collections may arrive as one merged `IOHIDDevice` (observed)
+  or split per top-level collection depending on macOS version - match the
+  device whose `DeviceUsagePairs` include page `0xFF53`, not just VID/PID.
+- `kIOHIDMaxFeatureReportSize` reports 64 for this channel.
+
 ### 5.2 Command dictionary (from Synapse's lighting-engine JS)
 
 Headers are `[data size, class, id]`:
@@ -231,6 +249,9 @@ From Razer's public device manifest
 
 1. `swift run seiren-probe lighting` - read-only; the reported serial must match
    the device sticker (Synapse logged `UC2618L08100451` for this unit).
+   **✓ Verified 2026-08-05**: firmware v1.0, serial match, mode 0, and the
+   brightness read back the value Synapse had last written - the full report
+   stack (framing, checksum, reply parsing) is confirmed end to end.
 2. `swift run seiren-probe lighting static 00FF00` - the ring should turn green.
 3. If an effect command succeeds but nothing changes visually, try driver mode
    first: `swift run seiren-probe lighting mode 3`, then the effect (Synapse

@@ -28,12 +28,15 @@ public final class LightingSession {
     /// stage excludes the report ID, but hidapi's macOS backend passes numbered
     /// reports **with** the ID as byte 0 - and whether the descriptor's
     /// declared 64 bytes include the ID decides if the body must shrink to 63.
-    /// Rather than bake in one guess, the first command self-calibrates: each
-    /// candidate is tried until the device echoes a valid reply, and the winner
-    /// sticks for the rest of the session.
+    /// The first command self-calibrates: each candidate is tried until the
+    /// device echoes a valid reply, and the winner sticks for the session.
+    ///
+    /// Confirmed on a real V3 Pro (serial round-trip, 2026-08-05): `.prefixed`
+    /// wins - so it goes first and normally resolves on the first try; the
+    /// rest remain as fallbacks for other models/macOS versions.
     public enum Framing: String, CaseIterable, Sendable {
-        case bare = "64-byte body, no report-ID prefix"
         case prefixed = "report ID + 64-byte body"
+        case bare = "64-byte body, no report-ID prefix"
         case prefixedTrimmed = "report ID + 63-byte body"
         case bareTrimmed = "63-byte body, no report-ID prefix"
 
