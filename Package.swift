@@ -57,9 +57,9 @@ let package = Package(
             ]
         ),
 
-        // Read-only CoreAudio diagnostic: dumps every control the Seiren
-        // exposes on macOS, to locate the sidetone (mic-monitor) element.
-        .executableTarget(name: "seiren-probe"),
+        // CoreAudio diagnostic (control dump, monitor experiments) plus the
+        // `lighting` subcommands, which drive SeirenKit's HID lighting path.
+        .executableTarget(name: "seiren-probe", dependencies: ["SeirenKit"]),
 
         .testTarget(
             name: "SeirenKitTests",

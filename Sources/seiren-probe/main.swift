@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import SeirenKit
 
 // seiren-probe — read-only CoreAudio dump of a Razer Seiren's controls.
 //
@@ -18,6 +19,15 @@ import Foundation
 //   swift run seiren-probe monitor hold 0.9 # start device + enable, hold until Return
 //   swift run seiren-probe monitor swmon 0.9 # software monitor (mic->headphone), hold
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
+//
+// Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
+// needs Privacy → Input Monitoring the first time:
+//   swift run seiren-probe lighting            # read-only: firmware, serial, mode, brightness
+//   swift run seiren-probe lighting static 00FF00
+//   swift run seiren-probe lighting spectrum|breathing|wave|off
+//   swift run seiren-probe lighting frame FF0000,00FF00,...   # 1 or 12 colors
+//   swift run seiren-probe lighting brightness 80             # percent
+//   swift run seiren-probe lighting mode 0|3                  # device mode (3 = driver)
 
 // MARK: - helpers
 
@@ -355,6 +365,98 @@ func runProcMon() {
     }
 }
 
+// MARK: - lighting (vendor HID)
+
+/// Drive the Seiren's Chroma lighting over the vendor HID channel. The protocol
+/// was recovered from Synapse 4's own lighting engine (docs/PROTOCOL.md §6);
+/// `lighting` with no arguments runs only read commands.
+func runLighting(_ args: [String]) {
+    let session: LightingSession
+    do {
+        session = try LightingSession.openFirst()
+    } catch LightingError.permissionDenied {
+        print("""
+        HID access denied (TCC). Grant your terminal app Input Monitoring under
+        System Settings → Privacy & Security → Input Monitoring, then re-run.
+        """)
+        exit(1)
+    } catch LightingError.noDevice {
+        print("No Seiren found on USB. Plug it in and re-run.")
+        exit(1)
+    } catch {
+        print("Could not open the Seiren's HID interface: \(error)")
+        exit(1)
+    }
+
+    func run(_ what: String, _ body: () throws -> Void) {
+        do {
+            try body()
+            print("\(what): ok")
+        } catch {
+            print("\(what): FAILED — \(error)")
+            exit(1)
+        }
+    }
+
+    let cmd = args.first?.lowercased() ?? "info"
+    switch cmd {
+    case "info":
+        do {
+            let info = try session.probe()
+            print("Firmware:   \(info.firmware)")
+            print("Serial:     \(info.serial)")
+            print("Mode:       \(info.mode) (0 = normal, 3 = driver)")
+            print("Brightness: \(info.brightnessPercent.map { "\($0)%" } ?? "n/a")")
+        } catch {
+            print("Probe failed: \(error)")
+            print("(If this is the first run, check Input Monitoring permission.)")
+            exit(1)
+        }
+
+    case "static":
+        guard args.count >= 2, let color = RGB(hex: args[1]) else {
+            print("Usage: lighting static RRGGBB"); exit(1)
+        }
+        run("static \(color.hex)") { try session.setEffect(.static, colors: [color]) }
+
+    case "off", "spectrum", "breathing", "wave", "fire", "wheel":
+        let effect: ChromaEffect = [
+            "off": .off, "spectrum": .spectrum, "breathing": .breathing,
+            "wave": .wave, "fire": .fire, "wheel": .wheel,
+        ][cmd]!
+        run(cmd) { try session.setEffect(effect) }
+
+    case "frame":
+        guard args.count >= 2 else {
+            print("Usage: lighting frame RRGGBB[,RRGGBB × 12]"); exit(1)
+        }
+        var colors = args[1].split(separator: ",").compactMap { RGB(hex: String($0)) }
+        if colors.count == 1 {
+            colors = Array(repeating: colors[0], count: SeirenV3ProLighting.ledCount)
+        }
+        guard colors.count == SeirenV3ProLighting.ledCount else {
+            print("Need 1 or \(SeirenV3ProLighting.ledCount) colors."); exit(1)
+        }
+        run("frame") { try session.showFrame(colors) }
+
+    case "brightness":
+        guard args.count >= 2, let pct = Int(args[1]) else {
+            print("Usage: lighting brightness 0-100"); exit(1)
+        }
+        run("brightness \(pct)%") { try session.setBrightness(percent: pct) }
+
+    case "mode":
+        guard args.count >= 2, let mode = UInt8(args[1]), mode == 0 || mode == 3 else {
+            print("Usage: lighting mode 0|3"); exit(1)
+        }
+        run("device mode \(mode)") { try session.setDeviceMode(mode) }
+
+    default:
+        print("Unknown lighting command '\(cmd)'. See the header of this file for usage.")
+        exit(1)
+    }
+}
+
 // MARK: - main
 
 let system = AudioObjectID(kAudioObjectSystemObject)
@@ -362,6 +464,12 @@ let system = AudioObjectID(kAudioObjectSystemObject)
 // `procmon` is system-wide (no Seiren required) — handle it before device lookup.
 if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "procmon" {
     runProcMon()
+    exit(0)
+}
+
+// `lighting` talks HID, not CoreAudio — handle it before the audio device lookup.
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "lighting" {
+    runLighting(Array(CommandLine.arguments.dropFirst(2)))
     exit(0)
 }
 
