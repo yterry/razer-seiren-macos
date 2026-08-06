@@ -17,10 +17,14 @@ final class Settings {
         static let eqPreset      = "voice.eq.preset"    // EQPreset.name
         static let nsMode        = "voice.ns.mode"      // NoiseSuppression.rawValue
         static let legacyEnabled = "monitoringEnabled"  // pre-mode Bool (v0)
+        static let lightEffect   = "lighting.effect"    // ChromaEffect.rawValue (Int)
+        static let lightColor    = "lighting.color"     // "RRGGBB"
+        static let lightLevel    = "lighting.brightness" // Int 0...100
     }
 
-    /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys.
-    static let currentSchema = 2
+    /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
+    /// v3 = lighting keys (absence = "never touched the lights").
+    static let currentSchema = 3
 
     init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -40,6 +44,8 @@ final class Settings {
         }
         // v1 → v2: EQ keys added; their absence reads as "off / Flat", so there
         // is nothing to migrate — just record the new schema version.
+        // v2 → v3: lighting keys added; absence means "leave the device's
+        // lighting alone", so again nothing to migrate.
 
         defaults.set(Self.currentSchema, forKey: Key.schemaVersion)
     }
@@ -79,5 +85,32 @@ final class Settings {
                 .flatMap(MonitorEngine.NoiseSuppression.init(rawValue:)) ?? .off
         }
         set { defaults.set(newValue.rawValue, forKey: Key.nsMode) }
+    }
+
+    // MARK: Lighting
+
+    /// The user's lighting choice, or nil if they never set one — in which case
+    /// the app must not touch the device's lights at all.
+    var lightingState: LightingState? {
+        get {
+            guard defaults.object(forKey: Key.lightEffect) != nil,
+                  let effect = ChromaEffect(rawValue: UInt8(clamping: defaults.integer(forKey: Key.lightEffect)))
+            else { return nil }
+            let color = defaults.string(forKey: Key.lightColor).flatMap(RGB.init(hex:))
+            let level = defaults.object(forKey: Key.lightLevel) == nil
+                ? 100 : defaults.integer(forKey: Key.lightLevel)
+            return LightingState(effect: effect, color: color, brightnessPercent: level)
+        }
+        set {
+            guard let state = newValue else {
+                defaults.removeObject(forKey: Key.lightEffect)
+                defaults.removeObject(forKey: Key.lightColor)
+                defaults.removeObject(forKey: Key.lightLevel)
+                return
+            }
+            defaults.set(Int(state.effect.rawValue), forKey: Key.lightEffect)
+            if let c = state.color { defaults.set(c.hex, forKey: Key.lightColor) }
+            defaults.set(state.brightnessPercent, forKey: Key.lightLevel)
+        }
     }
 }
