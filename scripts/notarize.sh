@@ -13,8 +13,18 @@ APP="dist/Seiren.app"
 ZIP="dist/Seiren-${VERSION}.zip"
 PROFILE="${NOTARY_PROFILE:-seiren-notary}"
 
-echo "==> submitting to Apple notary service (profile: ${PROFILE})"
-xcrun notarytool submit "${ZIP}" --keychain-profile "${PROFILE}" --wait
+# CI has no stored keychain profile, so credentials can also come from the
+# environment (APPLE_ID + APPLE_TEAM_ID + NOTARY_PASSWORD, the app-specific
+# password). Locally, the stored profile keeps working as before.
+if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${NOTARY_PASSWORD:-}" ]]; then
+  echo "==> submitting to Apple notary service (Apple ID from environment)"
+  xcrun notarytool submit "${ZIP}" \
+    --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" \
+    --password "${NOTARY_PASSWORD}" --wait
+else
+  echo "==> submitting to Apple notary service (profile: ${PROFILE})"
+  xcrun notarytool submit "${ZIP}" --keychain-profile "${PROFILE}" --wait
+fi
 
 echo "==> stapling the ticket to ${APP}"
 xcrun stapler staple "${APP}"

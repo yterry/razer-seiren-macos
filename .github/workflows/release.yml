@@ -1,8 +1,20 @@
 name: Release
 
 # Tag-triggered: pushing a v* tag builds the .app, zips it with a checksum, and
-# creates a GitHub Release. Unsigned/ad-hoc for now (no paid Developer ID) — the
-# release notes tell users the one-time Gatekeeper bypass.
+# creates a GitHub Release.
+#
+# Signing is opt-in via repository secrets. When MACOS_CERT_P12 (and friends)
+# are present, the build is Developer-ID-signed, notarized, and stapled -
+# Gatekeeper opens it with no warning. Without the secrets, the workflow falls
+# back to the ad-hoc build with the one-time-bypass release notes, so a release
+# can never fail just because signing isn't configured.
+#
+# Required secrets for signed releases:
+#   MACOS_CERT_P12       base64 of the "Developer ID Application" .p12 export
+#   MACOS_CERT_PASSWORD  the .p12 export password
+#   APPLE_ID             the Apple ID email of the developer account
+#   APPLE_TEAM_ID        the 10-character team id
+#   NOTARY_PASSWORD      an app-specific password (appleid.apple.com)
 on:
   push:
     tags: ["v*"]
@@ -29,18 +41,68 @@ jobs:
       - name: Test
         run: swift test
 
-      - name: Package .app (ad-hoc)
+      - name: Import Developer ID certificate
+        id: sign
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CERT_P12}" ]; then
+            echo "No MACOS_CERT_P12 secret - packaging ad-hoc (unsigned)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN_PW="$(uuidgen)"
+          security create-keychain -p "${KEYCHAIN_PW}" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PW}" build.keychain
+          echo "${CERT_P12}" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "${CERT_PASSWORD}" -T /usr/bin/codesign
+          rm -f cert.p12
+          # Allow codesign to use the key without a UI prompt on the runner.
+          security set-key-partition-list -S "apple-tool:,apple:" -s \
+            -k "${KEYCHAIN_PW}" build.keychain >/dev/null
+          security list-keychains -d user -s build.keychain login.keychain
+          SIGN_ID="$(security find-identity -v -p codesigning build.keychain \
+            | awk -F'"' '/Developer ID Application/{print $2; exit}')"
+          if [ -z "${SIGN_ID}" ]; then
+            echo "::error::MACOS_CERT_P12 imported, but no 'Developer ID Application' identity found in it."
+            exit 1
+          fi
+          echo "Signing as: ${SIGN_ID}"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "sign_id=${SIGN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Package .app
+        env:
+          # Empty when unsigned - package.sh then ad-hoc-signs, as before.
+          SIGN_ID: ${{ steps.sign.outputs.sign_id }}
         run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
+
+      - name: Notarize + staple
+        if: steps.sign.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: VERSION="${{ steps.ver.outputs.version }}" scripts/notarize.sh
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.sign.outputs.signed }}
         run: |
+          if [ "${SIGNED}" = "true" ]; then
+            NOTES="Automated build for ${GITHUB_REF_NAME}. Signed with a Developer ID and notarized by Apple - opens with no Gatekeeper warning. Install with \`brew install --cask razer-seiren\` (after \`brew tap yterry/tap\`), update with \`brew update && brew upgrade --cask razer-seiren\`, or grab the zip below. macOS asks for Microphone permission on first launch; the Lighting menu asks for Input Monitoring on first use."
+          else
+            NOTES="Automated build for ${GITHUB_REF_NAME}. Unsigned .app - see the README 'Install' section for the one-time Gatekeeper bypass (or just \`brew install --cask razer-seiren\`, which clears it for you). macOS asks for Microphone permission on first launch (required to monitor, EQ, and denoise your voice)."
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             "dist/Seiren-${{ steps.ver.outputs.version }}.zip" \
             "dist/Seiren-${{ steps.ver.outputs.version }}.zip.sha256" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Automated build for ${GITHUB_REF_NAME}. Unsigned .app — see the README 'Install' section for the one-time Gatekeeper bypass (or just \`brew install --cask razer-seiren\`, which clears it for you). macOS asks for Microphone permission on first launch (required to monitor, EQ, and denoise your voice)."
+            --notes "${NOTES}"
 
       # Auto-bump the Homebrew tap so `brew upgrade` sees the new version. This is
       # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a PAT with write

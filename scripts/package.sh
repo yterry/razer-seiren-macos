@@ -65,8 +65,13 @@ cp -R "${DIST}/SeirenFX.driver" "${CONTENTS}/Resources/SeirenFX.driver"
 # --- Code signing --------------------------------------------------------
 if [[ -n "${SIGN_ID:-}" ]]; then
   echo "==> codesign with Developer ID: ${SIGN_ID}"
-  # Hardened Runtime (--options runtime) is REQUIRED for notarization.
-  codesign --force --options runtime --timestamp --sign "${SIGN_ID}" "${APP}"
+  # Hardened Runtime (--options runtime) is REQUIRED for notarization - and a
+  # hardened-runtime app is refused microphone access unless it carries the
+  # audio-input entitlement, so sign with Seiren.entitlements or the signed
+  # build cannot do the one thing it exists for.
+  codesign --force --options runtime --timestamp \
+           --entitlements "Sources/seiren-mac/Seiren.entitlements" \
+           --sign "${SIGN_ID}" "${APP}"
 else
   echo "==> codesign ad-hoc (no Developer ID provided)"
   # Ad-hoc gives the app a stable local identity so TCC can attribute the mic

@@ -41,7 +41,7 @@ let package = Package(
             dependencies: ["SeirenKit"],
             // Exclude the plist from the source compile; it is embedded via the
             // linker flag below, not compiled.
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "Seiren.entitlements"],
             linkerSettings: [
                 // Embed Info.plist into the Mach-O __TEXT,__info_plist section so
                 // the *running binary* carries NSMicrophoneUsageDescription even
