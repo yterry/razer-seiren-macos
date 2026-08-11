@@ -54,6 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         lighting.start()
         if let state = settings.lightingState { lighting.apply(state) }
 
+        // Sleep wipes the ring: USB power drops and the firmware falls back to
+        // its default spectrum effect, usually WITHOUT re-enumerating on wake -
+        // so the hotplug callback never fires and the user's choice stays lost.
+        // Re-assert it on every wake instead.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification, object: nil)
+
         rebuildMenu()
 
         // Restore the saved mode (migrating the pre-mode Bool if present). If
@@ -498,6 +506,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         settings.lightingState = state
         lighting.apply(state)
         rebuildMenu()
+    }
+
+    @objc private func systemDidWake() {
+        lighting.reassert()
     }
 
     @objc private func openInputMonitoringSettings() {

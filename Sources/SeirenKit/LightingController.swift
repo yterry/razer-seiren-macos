@@ -289,6 +289,11 @@ public struct LightingState: Equatable, Sendable {
 /// Tracks Seiren hotplug on the main run loop and (re)applies the user's
 /// lighting choice - lighting state is volatile on the device, so it must be
 /// re-asserted every attach, like the monitor engine does for monitoring.
+///
+/// `@MainActor` is the real confinement, not a convenience: the IOHIDManager
+/// is scheduled on the main run loop, so the C hotplug callbacks below arrive
+/// on the main thread and re-enter the actor via `assumeIsolated`.
+@MainActor
 public final class LightingController {
     public weak var delegate: LightingControllerDelegate?
 
@@ -301,6 +306,10 @@ public final class LightingController {
     private let pids: Set<Int>
     private let usagePages: Set<Int>
     private var currentDevice: IOHIDDevice?
+    /// Monotonic token: a newer apply()/reassert() invalidates any retry chain
+    /// still scheduled by an older reassert, so stale retries can't overwrite
+    /// a fresher user choice or pile up after repeated wakes.
+    private var assertGeneration = 0
 
     public init(models: [DeviceModel] = DeviceRegistry.all()) {
         pids = Set(models.map { Int($0.pid) })
@@ -314,13 +323,15 @@ public final class LightingController {
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         IOHIDManagerRegisterDeviceMatchingCallback(manager, { context, _, _, device in
             guard let context else { return }
-            Unmanaged<LightingController>.fromOpaque(context)
-                .takeUnretainedValue().attached(device)
+            let controller = Unmanaged<LightingController>.fromOpaque(context)
+                .takeUnretainedValue()
+            MainActor.assumeIsolated { controller.attached(device) }
         }, ctx)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, { context, _, _, device in
             guard let context else { return }
-            Unmanaged<LightingController>.fromOpaque(context)
-                .takeUnretainedValue().removed(device)
+            let controller = Unmanaged<LightingController>.fromOpaque(context)
+                .takeUnretainedValue()
+            MainActor.assumeIsolated { controller.removed(device) }
         }, ctx)
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(),
                                         CFRunLoopMode.defaultMode.rawValue)
@@ -334,7 +345,47 @@ public final class LightingController {
     /// replug is handled automatically.
     public func apply(_ state: LightingState) {
         desiredState = state
+        assertGeneration &+= 1
         assertDesiredState()
+    }
+
+    /// Re-assert the desired state after system wake. The mic's firmware
+    /// reverts to its built-in spectrum effect when USB power drops during
+    /// sleep, and wake usually does NOT re-enumerate the device - no attach
+    /// callback fires, so without this the user's choice stays lost until a
+    /// replug or app restart. The device can also answer late for a few
+    /// seconds after wake, so transient failures retry on a fixed interval.
+    ///
+    /// No-op until the user has ever configured lighting (`desiredState`
+    /// nil), preserving the "never touch an unconfigured device" contract.
+    public func reassert(attempts: Int = 5, interval: TimeInterval = 1.5) {
+        guard desiredState != nil else { return }
+        assertGeneration &+= 1
+        attemptReassert(remaining: attempts, interval: interval,
+                        generation: assertGeneration)
+    }
+
+    private func attemptReassert(remaining: Int, interval: TimeInterval,
+                                 generation: Int) {
+        guard generation == assertGeneration else { return }  // superseded
+        assertDesiredState()
+        guard let error = lastError, Self.isTransient(error), remaining > 1
+        else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(interval))
+            self?.attemptReassert(remaining: remaining - 1, interval: interval,
+                                  generation: generation)
+        }
+    }
+
+    /// Errors worth retrying after a wake. `.noDevice` is deliberately not
+    /// transient: reconnection is the attach callback's job, and it already
+    /// re-asserts. `.permissionDenied` is TCC - retrying can't fix it.
+    nonisolated static func isTransient(_ error: LightingError) -> Bool {
+        switch error {
+        case .io, .noReply, .deviceRejected: return true
+        case .noDevice, .permissionDenied: return false
+        }
     }
 
     private func attached(_ device: IOHIDDevice) {
