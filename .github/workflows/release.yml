@@ -163,10 +163,18 @@ jobs:
             git add Casks/razer-seiren.rb
             git diff --cached --quiet && { echo "cask already current"; return 0; }
             git commit -m "razer-seiren ${VERSION}" || return 1
-            git push -u origin "cask-${VERSION}" || return 1
+            # Force-push: a rerun after a partial failure finds this branch
+            # already on the remote with a divergent history. The branch is
+            # owned by this automation and exists only to carry one bump, so
+            # overwriting it is what makes the step idempotent.
+            git push -u --force origin "cask-${VERSION}" || return 1
+            # Same idempotency on the PR: a rerun may find one already open
+            # for this branch, which makes `gh pr create` fail - fall through
+            # and let the merge (addressed by branch name) pick it up.
             GH_TOKEN="${TAP_TOKEN}" gh pr create --repo yterry/homebrew-tap \
               --title "razer-seiren ${VERSION}" \
-              --body "Automated bump from the v${VERSION} release workflow." || return 1
+              --body "Automated bump from the v${VERSION} release workflow." \
+              || echo "gh pr create failed (PR may already exist) - trying the merge anyway."
             # A merge failure (e.g. a future required check) is downgraded to a
             # warning: the PR stays open for a one-click manual merge, which
             # beats rebuilding the bump from scratch.
