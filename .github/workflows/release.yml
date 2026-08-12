@@ -131,10 +131,17 @@ jobs:
             --notes "${NOTES}"
 
       # Auto-bump the Homebrew tap so `brew upgrade` sees the new version. This is
-      # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a PAT with write
-      # access to yterry/homebrew-tap), and `continue-on-error` guarantees that a
-      # failed bump (bad token, push rejected, asset not yet propagated, …) can
-      # never fail a release that has already been published in the step above.
+      # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a fine-grained
+      # PAT for yterry/homebrew-tap with Contents and Pull requests read/write),
+      # and `continue-on-error` guarantees that a failed bump (bad token, asset
+      # not yet propagated, …) can never fail a release that has already been
+      # published in the step above.
+      #
+      # The bump lands via a PR, not a direct push: the tap's main-branch
+      # ruleset requires pull requests with NO bypass actors, so a push to main
+      # is rejected for everyone - including this token (verified 2026-08-12,
+      # v1.2.0). With zero required approvals the PR can merge immediately;
+      # squash keeps the tap history one commit per release.
       - name: Update Homebrew tap
         continue-on-error: true
         env:
@@ -149,12 +156,30 @@ jobs:
           bump() {
             git clone "https://x-access-token:${TAP_TOKEN}@github.com/yterry/homebrew-tap.git" tap || return 1
             cd tap || return 1
+            git checkout -b "cask-${VERSION}" || return 1
             ./scripts/bump-cask.sh "${VERSION}" || return 1
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add Casks/razer-seiren.rb
             git diff --cached --quiet && { echo "cask already current"; return 0; }
             git commit -m "razer-seiren ${VERSION}" || return 1
-            git push || return 1
+            # Force-push: a rerun after a partial failure finds this branch
+            # already on the remote with a divergent history. The branch is
+            # owned by this automation and exists only to carry one bump, so
+            # overwriting it is what makes the step idempotent.
+            git push -u --force origin "cask-${VERSION}" || return 1
+            # Same idempotency on the PR: a rerun may find one already open
+            # for this branch, which makes `gh pr create` fail - fall through
+            # and let the merge (addressed by branch name) pick it up.
+            GH_TOKEN="${TAP_TOKEN}" gh pr create --repo yterry/homebrew-tap \
+              --title "razer-seiren ${VERSION}" \
+              --body "Automated bump from the v${VERSION} release workflow." \
+              || echo "gh pr create failed (PR may already exist) - trying the merge anyway."
+            # A merge failure (e.g. a future required check) is downgraded to a
+            # warning: the PR stays open for a one-click manual merge, which
+            # beats rebuilding the bump from scratch.
+            GH_TOKEN="${TAP_TOKEN}" gh pr merge "cask-${VERSION}" \
+              --repo yterry/homebrew-tap --squash --delete-branch \
+              || echo "::warning::Tap PR opened but auto-merge failed - merge it manually."
           }
           bump || echo "::warning::Homebrew tap bump failed — run scripts/bump-cask.sh ${VERSION} in the tap manually."
