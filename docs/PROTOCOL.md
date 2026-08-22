@@ -61,6 +61,44 @@ buffer = [0x07] + body64            // 65 bytes total
 IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, /*reportID*/ 0x07, buffer, 65)
 ```
 
+### 1.1 Razer Seiren V3 Mini (from its USB descriptors)
+
+`VID 0x1532`, `PID 0x056A`, `iProduct "Razer Seiren V3 Mini"`. Source: the
+`lsusb -v` and HID report-descriptor dumps in
+[openrazer#2479](https://github.com/openrazer/openrazer/issues/2479) (no Mini
+has been on a Mac we control - everything below is descriptor-level, and the
+app's Mini support was verified against another input-only Core Audio device).
+Three interfaces, no IAD:
+
+| Interface | Class | Role |
+|---|---|---|
+| 0 | 1 / sub 1 | USB-Audio control: one `INPUT_TERMINAL` (microphone, **1 channel**), a Feature Unit with mute + volume, `OUTPUT_TERMINAL` = USB streaming |
+| 1 (alt 1-4) | 1 / sub 2 | USB-Audio streaming, **isochronous IN only**: 16/24-bit at 8/16/32/44.1/48 kHz (alt 1-2), 16/24-bit at 96 kHz (alt 3-4) |
+| 2 | 3 (HID) | control, one interrupt IN endpoint (64 B), report descriptor 141 B |
+
+**There is no audio OUT interface** - the Mini has no headphone jack, so macOS
+exposes it as an *input-only* device. The app therefore skips the monitor and
+runs its IOProc into Seiren FX only (`MonitorEngine.deviceHasHeadphoneOutput`).
+
+The HID report descriptor decodes to a **single** application collection
+(Consumer Control, page `0x0C`), which means macOS most likely surfaces it as
+**one** `IOHIDDevice` with primary usage page `0x0C`:
+
+| Report ID | Usage page | Direction | Size | Notes |
+|---|---|---|---|---|
+| `0x01` | `0x0C` Consumer + `0xFF01` vendor | Input | bits | volume +/-, mute, play/pause, next/prev, vendor pad bits |
+| `0x01` | `0xFF07` vendor | In 13 B / **Out 15 B** | | vendor channel |
+| **`0x07`** | **`0xFF07` vendor** | In / Out / **Feature** | **63 B** | **Razer control report** - the V3 Pro's `0x07`/`0xFF53` shape on a different page, one byte shorter |
+| `0x05` | `0xFF07` vendor | In / Out / Feature | 15 B | status/events (the Pro has `0x05` on `0xFF53`, Input only) |
+
+So the Mini almost certainly speaks the same §2 command grammar over
+`0xFF07`/report `0x07` - that is presumably how Synapse configures its
+tap-to-mute and sample rate. **Nothing in the app sends to it.** The lighting
+code is gated on `DeviceModel.chromaLighting`, which is `false` for the Mini:
+its only light is a red/green mute LED, and the Device25 Chroma dictionary in §5
+was recovered from the V3 Pro's firmware only. Exercising this channel needs a
+Mini on a Mac plus captured Synapse traffic, per §3 - not guesswork.
+
 ## 2. Razer audio command grammar
 
 > **⚠️ Correction (Synapse-4 log mining, 2026-08-05): the V3 Pro does not use the
