@@ -61,6 +61,22 @@ final class LightingControllerTests: XCTestCase {
         XCTAssertEqual(recorder.changes, 2, "no retries may fire for .noDevice")
     }
 
+    func testNonChromaModelIsNeverALightingCandidate() throws {
+        // The V3 Mini's vendor channel is unverified and it has no Chroma
+        // zone; whatever is plugged into the test machine, the lighting code
+        // must not consider it. Same for a user JSON that omits the flag.
+        let mini = try XCTUnwrap(DeviceRegistry.builtins.first { $0.pid == 0x056A })
+        XCTAssertFalse(mini.chromaLighting)
+        XCTAssertTrue(LightingSession.candidateDevices(models: [mini]).isEmpty)
+        XCTAssertThrowsError(try LightingSession.openFirst(models: [mini])) { error in
+            XCTAssertEqual(error as? LightingError, .noDevice)
+        }
+
+        let controller = LightingController(models: [mini])
+        XCTAssertNil(controller.attachedModel)
+        XCTAssertFalse(controller.deviceConnected)
+    }
+
     func testWakeRetryPolicy() {
         XCTAssertTrue(LightingController.isTransient(.io(kIOReturnError)),
                       "USB stack still resuming after wake")

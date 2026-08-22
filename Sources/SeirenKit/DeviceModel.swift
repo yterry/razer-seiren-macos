@@ -47,19 +47,44 @@ public struct DeviceModel: Codable, Equatable, Sendable {
     public var name: String
     /// USB product ID (VID is always Razer = 0x1532).
     public var pid: UInt16
-    /// Informational: the vendor HID usage page the audio commands ride
-    /// (0xFF53 = Razer audio, on the V3 Pro).
+    /// Informational: the vendor HID usage page the Razer control report rides
+    /// (0xFF53 on the V3 Pro, 0xFF07 on the V3 Mini).
     public var hidUsagePage: UInt16
+    /// True when the model has a Chroma RGB zone driven by the Razer "Device25"
+    /// lighting protocol (docs/PROTOCOL.md §5) - the V3 Pro's 12-LED ring.
+    /// Models without one (the V3 Mini has only a red/green mute LED) are
+    /// never opened or written to by the lighting code, so a command class we
+    /// verified on one firmware can't be aimed at another we haven't.
+    /// Absent in JSON = false: lighting is opted into per model, never assumed.
+    public var chromaLighting: Bool
     public var commands: CommandTable
     public var notes: String?
 
     public init(name: String, pid: UInt16, hidUsagePage: UInt16,
-                commands: CommandTable, notes: String? = nil) {
+                chromaLighting: Bool = false,
+                commands: CommandTable = CommandTable(), notes: String? = nil) {
         self.name = name
         self.pid = pid
         self.hidUsagePage = hidUsagePage
+        self.chromaLighting = chromaLighting
         self.commands = commands
         self.notes = notes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, pid, hidUsagePage, chromaLighting, commands, notes
+    }
+
+    /// Hand-written so optional capability keys can be omitted from a
+    /// contributed `devices/*.json` (the synthesized decoder would demand them).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        pid = try c.decode(UInt16.self, forKey: .pid)
+        hidUsagePage = try c.decode(UInt16.self, forKey: .hidUsagePage)
+        chromaLighting = try c.decodeIfPresent(Bool.self, forKey: .chromaLighting) ?? false
+        commands = try c.decodeIfPresent(CommandTable.self, forKey: .commands) ?? CommandTable()
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
     }
 
     /// True once the monitor-on bytes have been captured for this model.

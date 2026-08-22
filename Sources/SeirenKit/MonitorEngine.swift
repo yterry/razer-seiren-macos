@@ -12,6 +12,13 @@ import SeirenDSP
 // it in software: a single full-duplex AudioDeviceIOProc on the Seiren copies
 // mic input straight to the headphone output. Latency is ~one audio buffer.
 //
+// Jack-less models (the V3 Mini) are input-only Core Audio devices: there is
+// no headphone output, so no monitor. They are still fully served by the
+// creator path - the same IOProc reads the mic and writes the processed voice
+// to the Seiren FX virtual device, which is where the EQ and noise suppression
+// reach OBS / Zoom / Discord. The engine detects the missing output at runtime
+// (`deviceHasHeadphoneOutput`) rather than keying on a model list.
+//
 // Real-time discipline: the IOProc (`monitorIOProc`) runs on Core Audio's
 // real-time thread. It must not allocate, lock, call into the Objective-C or
 // Swift runtimes, or touch any non-`Sendable`/refcounted state. It only reads
@@ -35,14 +42,33 @@ import SeirenDSP
 // the audio thread, which is the whole point.
 nonisolated(unsafe) private var gMonitorLevel: Float = 0.7
 
+// How many leading *output* buffers of the route aggregate belong to the
+// Seiren's own headphone output - its output-stream count: 1 on a V3 Pro, 0 on
+// a jack-less V3 Mini. Those buffers get the monitor branch × level; every
+// buffer after them is Seiren FX and gets the broadcast at unity. Written on
+// the main thread before AudioDeviceStart, read on the RT thread. Internal
+// (not private) so the RT proc can be driven with synthetic buffers in tests.
+nonisolated(unsafe) var gMonitorOutBuffers: Int32 = 1
+
+// Route diagnostics: plain stores from the RT procs (single writer), read on
+// the main thread through `MonitorEngine.routeDiagnostics`. A torn read is
+// harmless - these feed a probe printout and bug reports, never control flow.
+nonisolated(unsafe) private var gDiagCallbacks: Int64 = 0
+nonisolated(unsafe) private var gDiagInputBuffers: Int32 = 0
+nonisolated(unsafe) private var gDiagOutputBuffers: Int32 = 0
+nonisolated(unsafe) private var gDiagInputPeak: Float = 0
+
 /// The RT callback: fan input channel 0 to every output channel, scaled by the
 /// global level; zero any trailing/extra output frames so we never emit stale
 /// buffer contents. RT-safe: no allocation, no locks, no runtime calls.
-nonisolated(unsafe) private let monitorIOProc: AudioDeviceIOProc = {
+nonisolated(unsafe) let monitorIOProc: AudioDeviceIOProc = {
     (_, _, inData, _, outData, _, _) -> OSStatus in
     let outBL = UnsafeMutableAudioBufferListPointer(outData)
     let inBL = UnsafeMutableAudioBufferListPointer(
         UnsafeMutablePointer(mutating: inData))
+    gDiagCallbacks &+= 1
+    gDiagInputBuffers = Int32(inBL.count)
+    gDiagOutputBuffers = Int32(outBL.count)
 
     // No usable input this cycle → emit silence rather than garbage.
     guard inBL.count > 0, let srcRaw = inBL[0].mData else {
@@ -55,6 +81,16 @@ nonisolated(unsafe) private let monitorIOProc: AudioDeviceIOProc = {
     let s = srcRaw.assumingMemoryBound(to: Float.self)
     let srcFrames = Int(src.mDataByteSize) / (MemoryLayout<Float>.size * srcCh)
     let level = gMonitorLevel
+
+    var peak = gDiagInputPeak
+    var pf = 0
+    while pf < srcFrames {
+        let v = s[pf * srcCh]
+        let a = v < 0 ? -v : v
+        if a > peak { peak = a }
+        pf += 1
+    }
+    gDiagInputPeak = peak
 
     for bi in 0..<outBL.count {
         let out = outBL[bi]
@@ -96,16 +132,21 @@ nonisolated(unsafe) private var gStudioRateIs96k: Int32 = 0
 /// The RT callback for the *creator* path: runs on a private aggregate device
 /// {Seiren, SeirenFX}. Reads the Seiren mic (aggregate input buffer 0, ch0),
 /// applies the EQ in C (`seiren_dsp_process`), then fans the processed mono mic
-/// to two output buffers: buffer 0 = the Seiren headphones (× monitor level, so
-/// you hear yourself) and buffer 1 = SeirenFX (unity, so OBS/Zoom record the
-/// processed voice). Buffer order is the aggregate's sub-device order
-/// [Seiren, SeirenFX] — verified on hardware. RT-safe: no allocation, no locks,
-/// no Swift-runtime calls; the only non-trivial call is the C DSP function.
-nonisolated(unsafe) private let routeIOProc: AudioDeviceIOProc = {
+/// to the output buffers: the first `gMonitorOutBuffers` are the Seiren's own
+/// headphone output (× monitor level, so you hear yourself) and the rest are
+/// SeirenFX (unity, so OBS/Zoom record the processed voice). Buffer order is
+/// the aggregate's sub-device order [Seiren, SeirenFX], one buffer per stream
+/// — verified on hardware — so a jack-less mic (no output streams) puts
+/// SeirenFX at buffer 0. RT-safe: no allocation, no locks, no Swift-runtime
+/// calls; the only non-trivial call is the C DSP function.
+nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
     (_, _, inData, _, outData, _, _) -> OSStatus in
     let outBL = UnsafeMutableAudioBufferListPointer(outData)
     let inBL = UnsafeMutableAudioBufferListPointer(
         UnsafeMutablePointer(mutating: inData))
+    gDiagCallbacks &+= 1
+    gDiagInputBuffers = Int32(inBL.count)
+    gDiagOutputBuffers = Int32(outBL.count)
 
     guard inBL.count > 0, let micRaw = inBL[0].mData,
           let fxBuf = gScratch, let monBuf = gScratchMon else {
@@ -117,17 +158,31 @@ nonisolated(unsafe) private let routeIOProc: AudioDeviceIOProc = {
     let mic = micRaw.assumingMemoryBound(to: Float.self)
     let avail = Int(inBL[0].mDataByteSize) / (MemoryLayout<Float>.size * micCh)
     let frames = min(avail, gScratchCapacity)
+    let monitorBuffers = Int(gMonitorOutBuffers)
 
     // Shared front of the chain: mic channel 0 → gate (gate is zero-latency).
+    // The raw-input peak is tracked here, before any processing, so the probe
+    // can tell "mic is silent / muted" from "gate closed".
+    var peak = gDiagInputPeak
     var f = 0
-    while f < frames { fxBuf[f] = mic[f * micCh]; f += 1 }
+    while f < frames {
+        let v = mic[f * micCh]
+        fxBuf[f] = v
+        let a = v < 0 ? -v : v
+        if a > peak { peak = a }
+        f += 1
+    }
+    gDiagInputPeak = peak
     seiren_dsp_gate(fxBuf, Int32(frames), 1)                 // no-op if gate off
 
     // Monitor branch (what you hear): EQ only, NO Studio, so it stays
-    // low-latency. Independent EQ state bank 0.
-    var m = 0
-    while m < frames { monBuf[m] = fxBuf[m]; m += 1 }
-    seiren_dsp_process_mono(monBuf, Int32(frames), 0)        // no-op if EQ off
+    // low-latency. Independent EQ state bank 0. Skipped entirely when the mic
+    // has no headphone output - there is nothing to feed.
+    if monitorBuffers > 0 {
+        var m = 0
+        while m < frames { monBuf[m] = fxBuf[m]; m += 1 }
+        seiren_dsp_process_mono(monBuf, Int32(frames), 0)    // no-op if EQ off
+    }
 
     // Broadcast branch (what apps record via SeirenFX): Studio denoise then EQ.
     // The ~10 ms Studio latency lives here only. Independent EQ state bank 1.
@@ -141,10 +196,12 @@ nonisolated(unsafe) private let routeIOProc: AudioDeviceIOProc = {
         let dstCh = max(Int(out.mNumberChannels), 1)
         let d = dstRaw.assumingMemoryBound(to: Float.self)
         let dstFrames = Int(out.mDataByteSize) / (MemoryLayout<Float>.size * dstCh)
-        // Buffer 0 = Seiren headphones (monitor × level); buffer 1+ = SeirenFX
-        // (broadcast, unity). Monitor is the low-latency signal; FX is denoised.
-        let src = (bi == 0) ? monBuf : fxBuf
-        let gain: Float = (bi == 0) ? level : 1.0
+        // Leading buffers = Seiren headphones (monitor × level); the rest =
+        // SeirenFX (broadcast, unity). Monitor is the low-latency signal; FX
+        // is denoised.
+        let isMonitor = bi < monitorBuffers
+        let src = isMonitor ? monBuf : fxBuf
+        let gain: Float = isMonitor ? level : 1.0
         let n = min(frames, dstFrames)
 
         var ff = 0
@@ -198,6 +255,12 @@ public final class MonitorEngine {
         case running            // IOProc live — you can hear yourself
         case waiting            // mode .auto, armed, no app recording from the Seiren yet
         case noDevice           // enabled but no Seiren present
+        /// A jack-less Seiren (V3 Mini) is attached but Seiren FX isn't
+        /// installed: with no headphone output to monitor to and no virtual
+        /// device to carry the processed mic, there is nowhere to route. Clears
+        /// by itself once the driver is installed (coreaudiod's restart fires
+        /// the hotplug listener).
+        case needsFX
         case permissionDenied   // TCC: Microphone access not granted
         case failed(Int32)      // a Core Audio call returned this OSStatus
     }
@@ -208,6 +271,42 @@ public final class MonitorEngine {
         didSet { if state != oldValue { notify() } }
     }
     public private(set) var connectedDeviceName: String?
+
+    /// Whether the matched Seiren has an output stream - a headphone jack to
+    /// monitor through. False for an input-only model (the V3 Mini), which the
+    /// engine serves through Seiren FX only: no monitor, no monitor level, and
+    /// nothing to do until the driver is installed (`.needsFX`). Reflects the
+    /// most recently matched device; the default (true) is the V3 Pro case.
+    public private(set) var deviceHasHeadphoneOutput = true {
+        didSet { if deviceHasHeadphoneOutput != oldValue { notify() } }
+    }
+
+    /// Live counters from the RT proc since the route last started, for
+    /// `seiren-probe route` and bug reports: proves the IOProc is cycling,
+    /// shows the buffer layout the aggregate handed us, and whether the mic is
+    /// delivering signal at all.
+    public struct RouteDiagnostics: Equatable, Sendable {
+        /// IOProc invocations so far.
+        public var callbacks: Int
+        /// Input / output AudioBuffers per cycle (one per stream).
+        public var inputBuffers: Int
+        public var outputBuffers: Int
+        /// Leading output buffers that are the Seiren's own headphone output.
+        public var monitorBuffers: Int
+        /// Highest |sample| seen on the raw mic (linear, 0…1).
+        public var inputPeak: Float
+        /// Nominal rate of the device the proc runs on.
+        public var sampleRate: Double
+    }
+
+    public var routeDiagnostics: RouteDiagnostics {
+        RouteDiagnostics(callbacks: Int(gDiagCallbacks),
+                         inputBuffers: Int(gDiagInputBuffers),
+                         outputBuffers: Int(gDiagOutputBuffers),
+                         monitorBuffers: Int(gMonitorOutBuffers),
+                         inputPeak: gDiagInputPeak,
+                         sampleRate: liveSampleRate)
+    }
 
     public private(set) var mode: Mode = .off {
         didSet { if mode != oldValue { notify() } }
@@ -313,6 +412,7 @@ public final class MonitorEngine {
     private var procID: AudioDeviceIOProcID?      // live IOProc, if running
     private var procDeviceID: AudioObjectID?      // device the IOProc is attached to (Seiren or aggregate)
     private var aggregateID: AudioObjectID?       // private aggregate, when routing through SeirenFX
+    private var liveSampleRate: Double = 0        // rate of the device the proc runs on (diagnostics)
     private var devicesListenerInstalled = false
     private var autoTimer: Timer?
 
@@ -395,8 +495,10 @@ public final class MonitorEngine {
                 teardownProc(); deviceID = nil; connectedDeviceName = nil
                 state = .noDevice; return
             }
-            deviceID = dev
-            connectedDeviceName = deviceName(dev)
+            adopt(dev)
+            if needsFX {
+                teardownProc(); state = .needsFX; return
+            }
             ensureRunning(on: dev)
 
         case .auto:
@@ -405,11 +507,29 @@ public final class MonitorEngine {
                 teardownProc(); deviceID = nil; connectedDeviceName = nil
                 state = .noDevice; return
             }
-            deviceID = dev
-            connectedDeviceName = deviceName(dev)
+            adopt(dev)
+            if needsFX {
+                stopAutoTimer(); teardownProc(); state = .needsFX; return
+            }
+            if state == .needsFX { state = .waiting }   // the driver just arrived
             startAutoTimer()
             pollAuto()          // evaluate immediately, don't wait a tick
         }
+    }
+
+    /// Record the matched Seiren and what it can do.
+    private func adopt(_ dev: AudioObjectID) {
+        deviceID = dev
+        connectedDeviceName = deviceName(dev)
+        deviceHasHeadphoneOutput = hasStreams(dev, scope: kAudioObjectPropertyScopeOutput)
+    }
+
+    /// An input-only Seiren has nowhere to go without Seiren FX: no headphone
+    /// output to monitor to, and no virtual device to carry the processed mic
+    /// to other apps. Installing the driver restarts coreaudiod, which changes
+    /// the device list and re-runs `reconcile()` - no polling needed.
+    private var needsFX: Bool {
+        !deviceHasHeadphoneOutput && findFXDevice() == nil
     }
 
     /// `.auto` heartbeat: monitor iff another app is recording from the Seiren.
@@ -419,7 +539,7 @@ public final class MonitorEngine {
             teardownProc(); deviceID = nil; connectedDeviceName = nil
             state = .noDevice; return
         }
-        deviceID = dev
+        if deviceID != dev { adopt(dev) }
         // A "call" is any other app recording from the Seiren *or* from SeirenFX
         // (creator apps like OBS record the SeirenFX virtual device, not the
         // Seiren directly), so either should arm the route.
@@ -429,7 +549,7 @@ public final class MonitorEngine {
             ensureRunning(on: dev)          // a call is active → start
         } else {
             if procID != nil { teardownProc() }   // nobody using the mic → idle
-            if state != .permissionDenied, !state.isFailure { state = .waiting }
+            if !state.isSticky { state = .waiting }
         }
     }
 
@@ -448,42 +568,64 @@ public final class MonitorEngine {
     /// aggregate {Seiren, SeirenFX} driven by `routeIOProc` (monitor + EQ +
     /// broadcast to other apps). Falls back to a direct monitor on the Seiren
     /// (no EQ/broadcast) when SeirenFX isn't installed or the aggregate fails.
+    /// An input-only Seiren has no fallback: without SeirenFX it is `.needsFX`,
+    /// and an FX route that fails to start is reported as the failure it is.
     private func startProc(on seiren: AudioObjectID) {
-        ensureScratch()
+        Self.ensureScratch()
+        resetDiagnostics()
+        let hasOutput = hasStreams(seiren, scope: kAudioObjectPropertyScopeOutput)
+        // One output buffer per Seiren output stream leads the aggregate's
+        // output list; a jack-less mic contributes none, so SeirenFX is first.
+        gMonitorOutBuffers = hasOutput
+            ? Int32(streamCount(seiren, scope: kAudioObjectPropertyScopeOutput)) : 0
 
         // --- Creator path: route through SeirenFX -----------------------------
-        if let fx = findFXDevice(), let agg = createAggregate(seiren: seiren, fx: fx) {
-            setBufferFrameSize(agg, preferredBufferFrames)
-            eqEngine.setSampleRate(nominalRate(agg))   // recompute coeffs at the live rate
-            eqEngine.reset()
-            applyNoiseSuppression()                    // gate/Studio at the live rate
+        var fxFailure: OSStatus?   // why the FX route didn't come up, if it didn't
+        if let fx = findFXDevice() {
+            if let agg = createAggregate(seiren: seiren, fx: fx) {
+                setBufferFrameSize(agg, preferredBufferFrames)
+                liveSampleRate = nominalRate(agg)
+                eqEngine.setSampleRate(liveSampleRate)     // recompute coeffs at the live rate
+                eqEngine.reset()
+                applyNoiseSuppression()                    // gate/Studio at the live rate
 
-            var pid: AudioDeviceIOProcID?
-            let created = AudioDeviceCreateIOProcID(agg, routeIOProc, nil, &pid)
-            if created == noErr, let pid {
-                let started = AudioDeviceStart(agg, pid)
-                if started == noErr {
-                    procID = pid
-                    procDeviceID = agg
-                    aggregateID = agg
-                    isRoutingThroughFX = true
-                    state = .running
-                    return
+                var pid: AudioDeviceIOProcID?
+                let created = AudioDeviceCreateIOProcID(agg, routeIOProc, nil, &pid)
+                if created == noErr, let pid {
+                    let started = AudioDeviceStart(agg, pid)
+                    if started == noErr {
+                        procID = pid
+                        procDeviceID = agg
+                        aggregateID = agg
+                        isRoutingThroughFX = true
+                        state = .running
+                        return
+                    }
+                    AudioDeviceDestroyIOProcID(agg, pid)
+                    if isProbablyPermissionError(started) {
+                        AudioHardwareDestroyAggregateDevice(agg)
+                        state = .permissionDenied
+                        return
+                    }
+                    fxFailure = started   // non-permission failure → try direct
+                } else {
+                    fxFailure = created
                 }
-                AudioDeviceDestroyIOProcID(agg, pid)
-                if isProbablyPermissionError(started) {
-                    AudioHardwareDestroyAggregateDevice(agg)
-                    state = .permissionDenied
-                    return
-                }
-                // Non-permission failure → drop the aggregate and try direct.
+                AudioHardwareDestroyAggregateDevice(agg)
+            } else {
+                fxFailure = kAudioHardwareUnspecifiedError
             }
-            AudioHardwareDestroyAggregateDevice(agg)
         }
 
         // --- Fallback: direct monitor on the Seiren (no FX → no EQ/broadcast) --
         isRoutingThroughFX = false
+        guard hasOutput else {
+            // Nothing to monitor to: the FX route was the only route.
+            state = fxFailure.map { .failed($0) } ?? .needsFX
+            return
+        }
         setBufferFrameSize(seiren, preferredBufferFrames)   // best-effort latency cut
+        liveSampleRate = nominalRate(seiren)
 
         var pid: AudioDeviceIOProcID?
         // inClientData = nil: the proc reads only globals, so it needs no
@@ -561,18 +703,68 @@ public final class MonitorEngine {
 
     // MARK: - Device discovery
 
-    /// First device whose name contains the match string and that has both an
-    /// input and an output stream (so a full-duplex IOProc is meaningful).
-    private func findSeiren() -> AudioObjectID? {
-        for dev in allDevices() {
-            guard let name = deviceName(dev),
-                  name.lowercased().contains(deviceNameMatch) else { continue }
-            if hasStreams(dev, scope: kAudioObjectPropertyScopeInput),
-               hasStreams(dev, scope: kAudioObjectPropertyScopeOutput) {
-                return dev
-            }
+    /// A name-matched audio device and its stream directions, as weighed by
+    /// `selectDevice`. Plain data so the choice is unit-testable without
+    /// hardware.
+    struct Candidate: Equatable {
+        var id: AudioObjectID
+        var name: String
+        var hasInput: Bool
+        var hasOutput: Bool
+        /// Not a physical mic: an aggregate or a virtual device - including
+        /// our own "Seiren FX" and "Seiren Voice", whose names contain
+        /// "seiren" and which are full-duplex, so a bare name match would
+        /// adopt them the moment the real mic is unplugged (or, worse, adopt
+        /// the live aggregate on the next hotplug event and tear itself down).
+        var isVirtual: Bool = false
+    }
+
+    /// Pick the Seiren to drive from `candidates`. It must be a physical
+    /// device with an input (it is a microphone); an output is optional - a
+    /// jack-less model (V3 Mini) is input-only and still fully usable through
+    /// Seiren FX. When several qualify, a full-duplex one wins, so a
+    /// headphone-equipped mic keeps its monitor even with an input-only one
+    /// also attached. Output-only devices never match, which also keeps a UAC
+    /// device that macOS splits into separate in/out halves from landing on
+    /// the wrong half.
+    nonisolated static func selectDevice(from candidates: [Candidate],
+                                         match: String) -> Candidate? {
+        let needle = match.lowercased()
+        let usable = candidates.filter {
+            !$0.isVirtual && $0.hasInput && $0.name.lowercased().contains(needle)
         }
-        return nil
+        return usable.first(where: \.hasOutput) ?? usable.first
+    }
+
+    private func findSeiren() -> AudioObjectID? {
+        let candidates = allDevices().compactMap { dev -> Candidate? in
+            guard let name = deviceName(dev),
+                  name.lowercased().contains(deviceNameMatch) else { return nil }
+            return Candidate(id: dev, name: name,
+                             hasInput: hasStreams(dev, scope: kAudioObjectPropertyScopeInput),
+                             hasOutput: hasStreams(dev, scope: kAudioObjectPropertyScopeOutput),
+                             isVirtual: isVirtualDevice(dev))
+        }
+        return Self.selectDevice(from: candidates, match: deviceNameMatch)?.id
+    }
+
+    /// Aggregates and virtual devices can't be the Seiren (it is USB hardware).
+    /// The transport type decides; our own Seiren FX and route aggregate are
+    /// also excluded by UID in case a driver reports no transport.
+    private func isVirtualDevice(_ dev: AudioObjectID) -> Bool {
+        if let uid = deviceUID(dev), uid == Self.fxDeviceUID || uid == Self.aggregateUID {
+            return true
+        }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &transport) == noErr
+        else { return false }
+        return transport == kAudioDeviceTransportTypeAggregate
+            || transport == kAudioDeviceTransportTypeVirtual
     }
 
     private func allDevices() -> [AudioObjectID] {
@@ -603,15 +795,22 @@ public final class MonitorEngine {
 
     private func hasStreams(_ dev: AudioObjectID,
                             scope: AudioObjectPropertyScope) -> Bool {
+        streamCount(dev, scope: scope) > 0
+    }
+
+    /// Number of streams the device has in `scope` - also the number of
+    /// AudioBuffers it contributes to an IOProc's buffer list in that direction.
+    private func streamCount(_ dev: AudioObjectID,
+                             scope: AudioObjectPropertyScope) -> Int {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreams,
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectHasProperty(dev, &addr) else { return false }
+        guard AudioObjectHasProperty(dev, &addr) else { return 0 }
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(dev, &addr, 0, nil, &size) == noErr
-        else { return false }
-        return size > 0
+        else { return 0 }
+        return Int(size) / MemoryLayout<AudioObjectID>.size
     }
 
     /// Best-effort: shrink the device's I/O buffer toward `frames` (clamped to
@@ -639,16 +838,16 @@ public final class MonitorEngine {
     // MARK: - SeirenFX routing (creator path)
 
     /// Stable identity of the SeirenFX virtual device (see Driver/SeirenFX).
-    private let fxDeviceUID = "SeirenFX:Device:0"
+    public static let fxDeviceUID = "SeirenFX:Device:0"
     /// UID of our private aggregate. Private + destroyed on teardown, so a fixed
     /// UID is safe (and lets us recognise a leaked one in diagnostics).
-    private let aggregateUID = "com.yterry.seiren-mac.route"
+    public static let aggregateUID = "com.yterry.seiren-mac.route"
 
     /// The SeirenFX device, if its driver is installed. Match by UID first
     /// (exact), then by name as a fallback.
     private func findFXDevice() -> AudioObjectID? {
         let devs = allDevices()
-        if let byUID = devs.first(where: { deviceUID($0) == fxDeviceUID }) { return byUID }
+        if let byUID = devs.first(where: { deviceUID($0) == Self.fxDeviceUID }) { return byUID }
         return devs.first(where: { deviceName($0) == "Seiren FX" })
     }
 
@@ -659,7 +858,7 @@ public final class MonitorEngine {
     private func createAggregate(seiren: AudioObjectID, fx: AudioObjectID) -> AudioObjectID? {
         guard let seirenUID = deviceUID(seiren), let fxUID = deviceUID(fx) else { return nil }
         let desc: [String: Any] = [
-            kAudioAggregateDeviceUIDKey as String: aggregateUID,
+            kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
             kAudioAggregateDeviceNameKey as String: "Seiren Voice",
             kAudioAggregateDeviceIsPrivateKey as String: 1,
             kAudioAggregateDeviceIsStackedKey as String: 0,
@@ -699,10 +898,20 @@ public final class MonitorEngine {
         return r > 0 ? r : 48000
     }
 
+    /// Zero the RT counters so `routeDiagnostics` describes the route that is
+    /// about to start. Main thread, before `AudioDeviceStart`.
+    private func resetDiagnostics() {
+        gDiagCallbacks = 0
+        gDiagInputBuffers = 0
+        gDiagOutputBuffers = 0
+        gDiagInputPeak = 0
+    }
+
     /// Allocate the mono EQ scratch once (process lifetime), big enough for any
     /// realistic IO buffer. Never freed → the RT thread can read `gScratch`
-    /// without an allocation or a free race.
-    private func ensureScratch() {
+    /// without an allocation or a free race. Static + internal so tests can
+    /// drive the RT proc directly.
+    static func ensureScratch() {
         guard gScratch == nil else { return }
         let cap = 16384
         gScratch = UnsafeMutablePointer<Float>.allocate(capacity: cap)
@@ -859,8 +1068,13 @@ public final class MonitorEngine {
 }
 
 private extension MonitorEngine.State {
-    var isFailure: Bool {
-        if case .failed = self { return true }
-        return false
+    /// States the Auto poll must not overwrite with `.waiting`: the user (or a
+    /// driver install) has to act, and flapping back to "waiting" every tick
+    /// would hide that and churn the menu.
+    var isSticky: Bool {
+        switch self {
+        case .permissionDenied, .needsFX, .failed: return true
+        case .stopped, .running, .waiting, .noDevice: return false
+        }
     }
 }

@@ -88,7 +88,10 @@ public final class LightingSession {
                 as? Int) == usagePage
     }
 
-    /// All attached Razer HID collection-devices with a registry PID.
+    /// All attached Razer HID collection-devices whose PID belongs to a
+    /// registry model **with Chroma lighting**. Models without it (the V3
+    /// Mini) are never candidates: their vendor channel is unverified, and
+    /// this protocol was recovered for the V3 Pro's firmware only.
     public static func candidateDevices(models: [DeviceModel] = DeviceRegistry.all())
         -> [IOHIDDevice] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
@@ -99,7 +102,7 @@ public final class LightingSession {
         guard let set = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
             return []
         }
-        let pids = Set(models.map { Int($0.pid) })
+        let pids = Set(models.filter(\.chromaLighting).map { Int($0.pid) })
         return set.filter {
             let pid = IOHIDDeviceGetProperty($0, kIOHIDProductIDKey as CFString) as? Int
             return pid.map(pids.contains) ?? false
@@ -112,7 +115,7 @@ public final class LightingSession {
     public static func openFirst(models: [DeviceModel] = DeviceRegistry.all()) throws -> LightingSession {
         let candidates = candidateDevices(models: models)
         guard !candidates.isEmpty else { throw LightingError.noDevice }
-        let pages = Set(models.map { Int($0.hidUsagePage) })
+        let pages = Set(models.filter(\.chromaLighting).map { Int($0.hidUsagePage) })
         // Strongly prefer the collection that declares the Razer vendor usage
         // page; fall back to any candidate only if none does.
         let device = candidates.first(where: { d in
@@ -297,23 +300,35 @@ public struct LightingState: Equatable, Sendable {
 public final class LightingController {
     public weak var delegate: LightingControllerDelegate?
 
+    /// True while a Chroma-capable mic's vendor channel is attached.
     public private(set) var deviceConnected = false
+    /// The registry model of the attached Razer mic, Chroma-capable or not;
+    /// nil when none (or an unknown PID) is attached. Lets the UI tell "no mic
+    /// plugged in" from "this mic has no Chroma lighting" (V3 Mini) and hide
+    /// the Lighting controls for the latter instead of leaving them dangling.
+    public private(set) var attachedModel: DeviceModel?
     public private(set) var lastError: LightingError?
     /// The state to keep asserted, or nil to leave the device untouched.
     public private(set) var desiredState: LightingState?
 
     private let manager: IOHIDManager
-    private let pids: Set<Int>
+    private let models: [DeviceModel]
+    /// Vendor usage pages of the Chroma-capable models (the send path).
     private let usagePages: Set<Int>
     private var currentDevice: IOHIDDevice?
+    /// Every attached HID collection that belongs to a registry model. One mic
+    /// can surface as several IOHIDDevices (macOS may split its top-level
+    /// collections), so `attachedModel` is derived from what remains rather
+    /// than cleared on the first removal.
+    private var attachedDevices: [IOHIDDevice] = []
     /// Monotonic token: a newer apply()/reassert() invalidates any retry chain
     /// still scheduled by an older reassert, so stale retries can't overwrite
     /// a fresher user choice or pile up after repeated wakes.
     private var assertGeneration = 0
 
     public init(models: [DeviceModel] = DeviceRegistry.all()) {
-        pids = Set(models.map { Int($0.pid) })
-        usagePages = Set(models.map { Int($0.hidUsagePage) })
+        self.models = models
+        usagePages = Set(models.filter(\.chromaLighting).map { Int($0.hidUsagePage) })
         manager = IOHIDManagerCreate(kCFAllocatorDefault, 0)
     }
 
@@ -389,25 +404,50 @@ public final class LightingController {
     }
 
     private func attached(_ device: IOHIDDevice) {
-        guard let pid = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int,
-              pids.contains(pid),
-              // Each top-level HID collection arrives as its own device; only
-              // the Razer vendor-channel collection takes control reports.
-              usagePages.contains(where: {
-                  LightingSession.carriesRazerChannel(device, usagePage: $0)
-              })
-        else { return }
-        currentDevice = device
-        deviceConnected = true
-        assertDesiredState()
+        guard let model = Self.model(of: device, in: models)
+        else { return }   // some other Razer device (keyboard/mouse) - ignore
+        attachedDevices.append(device)
+        // Only a Chroma-capable model's vendor-channel collection is ever
+        // opened or written to. Each top-level HID collection arrives as its
+        // own device; only the Razer vendor-channel one takes control reports.
+        if model.chromaLighting,
+           usagePages.contains(where: {
+               LightingSession.carriesRazerChannel(device, usagePage: $0)
+           }) {
+            currentDevice = device
+            deviceConnected = true
+            refreshAttachedModel()
+            assertDesiredState()
+        } else {
+            refreshAttachedModel()
+        }
         notify()
     }
 
     private func removed(_ device: IOHIDDevice) {
-        guard device === currentDevice else { return }
-        currentDevice = nil
-        deviceConnected = false
+        guard let index = attachedDevices.firstIndex(where: { $0 === device })
+        else { return }
+        attachedDevices.remove(at: index)
+        if device === currentDevice {
+            currentDevice = nil
+            deviceConnected = false
+        }
+        refreshAttachedModel()
         notify()
+    }
+
+    /// The registry model for a HID device's product ID, if any.
+    private static func model(of device: IOHIDDevice, in models: [DeviceModel]) -> DeviceModel? {
+        guard let pid = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int
+        else { return nil }
+        return models.first { Int($0.pid) == pid }
+    }
+
+    /// Re-derive `attachedModel`: the Chroma device we hold wins; otherwise the
+    /// most recently attached registry collection still present.
+    private func refreshAttachedModel() {
+        let anchor = currentDevice ?? attachedDevices.last
+        attachedModel = anchor.flatMap { Self.model(of: $0, in: models) }
     }
 
     private func assertDesiredState() {

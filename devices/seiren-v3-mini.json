@@ -1,0 +1,12 @@
+{
+  "name": "Razer Seiren V3 Mini",
+  "pid": 1386,
+  "hidUsagePage": 65287,
+  "chromaLighting": false,
+  "notes": "pid 0x056A, usagePage 0xFF07. Input-only USB mic (mono, 8-96 kHz, 16/24-bit) with no headphone jack, so there is no monitor: the app drives it through Seiren FX (EQ + noise suppression reach the apps that record Seiren FX). HID interface 2 declares a Razer control report 0x07 (Feature, 63 bytes) and report 0x05 on vendor page 0xFF07 - the V3 Pro's channel shape on a different page - but it is unexercised and the mic has only a red/green mute LED, so the app sends it nothing. See docs/PROTOCOL.md §1.1.",
+  "commands": {
+    "monitorOn": null,
+    "monitorOff": null,
+    "handshake": null
+  }
+}
