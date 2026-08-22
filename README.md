@@ -35,6 +35,27 @@ simply doesn't exist. If you've recorded or streamed on a Mac with a Seiren and
 felt like you were talking into a void — flat, noisy, with no idea how loud you
 are — this is the fix.
 
+## Supported microphones
+
+| Model | Hear yourself | EQ + noise suppression | Lighting |
+|---|---|---|---|
+| **Seiren V3 Pro** | ✅ headphone jack | ✅ via Seiren FX | ✅ 12-LED Chroma ring |
+| **Seiren V3 Mini** | - no headphone jack | ✅ via Seiren FX | - mute LED only |
+| Other Seirens | if it has a jack | ✅ via Seiren FX | - |
+
+Any mic macOS sees as a USB audio device whose name contains "Seiren" is picked
+up automatically - no per-model code. A model with a headphone jack gets
+monitoring; every model gets the EQ and noise suppression, delivered to other
+apps through **Seiren FX**.
+
+**Seiren V3 Mini owners:** the Mini has no headphone jack, so there is nothing
+to monitor into - the app's job for it is the **EQ + noise suppression**, sent to
+OBS / Zoom / Discord through Seiren FX. The menu says so the first time
+("This mic has no headphone jack - it works through Seiren FX") and offers the
+one-time install; the volume slider and Lighting menu don't apply to the Mini
+and stay out of the way. Confirm the route from the terminal with
+`swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
+
 ## Install & run
 
 ### Option A — Homebrew (easiest)
@@ -98,7 +119,8 @@ swift build -c release
 
 Then:
 
-1. Plug headphones into the **Seiren's** headphone jack (not the Mac's).
+1. Plug headphones into the **Seiren's** headphone jack (not the Mac's). (V3
+   Mini: no jack - skip this; your route is Seiren FX, below.)
 2. Click the 🎙 menu and pick a **mode** (see below).
 3. The **first** time, macOS asks for **Microphone** permission — click **Allow**
    (the app reads the mic to monitor, EQ, and denoise your voice). If you miss the
@@ -141,7 +163,14 @@ Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling 
 
 - **Your headphone monitor reflects the EQ** whenever you're monitoring through Seiren FX.
 - **Other apps hear the EQ only if you pick “Seiren FX” as their microphone.** If
-  an app still points at “Razer Seiren V3 Pro”, it records the raw, un-EQ'd mic.
+  an app still points at “Razer Seiren V3 Pro” (or “V3 Mini”), it records the
+  raw, un-EQ'd mic.
+- **On a jack-less mic (V3 Mini) Seiren FX is the whole feature**: with no
+  headphone output there is nothing to monitor into, so until the driver is
+  installed the menu reads “needs Seiren FX” and nothing runs. Once installed,
+  **On — always** keeps the processed voice flowing to Seiren FX whenever the
+  mic is plugged in; **Auto** does it only while an app records from the mic or
+  from Seiren FX.
 
 **Install the Seiren FX driver (one-time):**
 
@@ -183,7 +212,9 @@ broadcast only.
 ### Lighting
 
 The V3 Pro's ring of 12 RGB LEDs is fully controllable from the app - no Synapse,
-no Windows.
+no Windows. (The V3 Mini has no Chroma zone - only a red/green mute LED - so the
+Lighting menu is hidden while a Mini is the attached mic, and the app never
+writes to its HID channel.)
 Open **🎙 → Lighting ▸** and pick **Spectrum** (the device default), **Breathing**,
 **Wave**, a **Static** color (nine-color palette), or **Off**, and set
 **Brightness** with the slider.
@@ -205,6 +236,7 @@ hardware forgets its lighting state on unplug.
 swift test                         # unit tests (SeirenKit)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls
+swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
@@ -223,8 +255,13 @@ the real-time audio thread.
 - **Real-time-safe callback.** The IOProc does no allocation, no locks, no Obj-C,
   no Swift-runtime calls — it just reads samples and writes samples. The level is
   a single atomically-readable value the UI can change live.
-- **Device match by name.** Any audio device whose name contains `seiren`
-  (case-insensitive) qualifies, so most Seiren models work with no per-model code.
+- **Device match by name.** Any *physical* audio device whose name contains
+  `seiren` (case-insensitive) and has an input stream qualifies, so most Seiren
+  models work with no per-model code. A model with an output stream (headphone
+  jack) gets the monitor; an input-only model (V3 Mini) runs the same IOProc
+  into Seiren FX only - the engine notices the missing output at runtime, so
+  there is no model list to maintain. The app's own virtual devices (Seiren FX,
+  its private aggregate) are excluded even though their names match.
 
 The core lives in **`SeirenKit`** (no AppKit, fully testable):
 
@@ -302,6 +339,9 @@ Full investigation and evidence: [`docs/HARDWARE_SIDETONE.md`](docs/HARDWARE_SID
   and notarized; only the old builds need the one-time Gatekeeper bypass.
 - **Headphones go in the Seiren, not the Mac.** Monitoring routes mic →
   *Seiren's* output. Plug your headphones into the mic.
+- **V3 Mini: no monitoring, no lighting.** It has no headphone jack and no
+  Chroma zone. It gets the EQ + noise suppression through Seiren FX, which is
+  the feature its owners ask for.
 
 ## Is it safe?
 
@@ -360,6 +400,16 @@ swift build
   should list a device whose name contains "Seiren".
 - Confirm your headphones are in the **Seiren's** jack, not the Mac's.
 
+**V3 Mini: the menu says “needs Seiren FX” / apps record a flat mic.**
+
+- The Mini has no jack, so everything runs through Seiren FX: install it from
+  **Voice ▸ Install Seiren FX…**, set the mode to **On — always**, then pick
+  **Seiren FX** as the microphone in the app you record with.
+- `swift run seiren-probe route` runs the real engine for 5 s and prints whether
+  the route is live, the buffer layout, and the mic's peak level. A peak of
+  “silence” with the route live usually means the mic is muted (the tap-to-mute
+  LED is red).
+
 ## Roadmap
 
 **Shipped:**
@@ -377,6 +427,10 @@ swift build
 - [x] **Notarization** - releases from v1.1.0 are Developer-ID-signed,
       notarized, and stapled by the release pipeline; Gatekeeper opens them
       with no bypass (`spctl` verified: "Notarized Developer ID").
+- [x] **Seiren V3 Mini** - input-only mics (no headphone jack) are now
+      supported: EQ + noise suppression through Seiren FX, with the monitor
+      controls and Lighting menu out of the way. `swift run seiren-probe route`
+      is the one-command check.
 
 **Next:**
 

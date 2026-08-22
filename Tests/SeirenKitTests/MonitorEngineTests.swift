@@ -66,6 +66,65 @@ final class MonitorEngineTests: XCTestCase {
         engine.shutdown()
     }
 
+    // MARK: Device selection (pure; no hardware)
+
+    private typealias Candidate = MonitorEngine.Candidate
+
+    func testSelectDeviceAcceptsInputOnlyMic() {
+        // The V3 Mini has no headphone jack: input streams only. It must still
+        // be chosen, or the app never sees the mic at all.
+        let mini = Candidate(id: 7, name: "Razer Seiren V3 Mini", hasInput: true, hasOutput: false)
+        XCTAssertEqual(MonitorEngine.selectDevice(from: [mini], match: "seiren"), mini)
+    }
+
+    func testSelectDeviceRejectsOutputOnlyDevice() {
+        // A microphone with no input stream isn't a microphone (e.g. the
+        // output half of a UAC device macOS splits in two).
+        let outOnly = Candidate(id: 3, name: "Razer Seiren X", hasInput: false, hasOutput: true)
+        XCTAssertNil(MonitorEngine.selectDevice(from: [outOnly], match: "seiren"))
+    }
+
+    func testSelectDevicePrefersFullDuplexOverInputOnly() {
+        // With a headphone-equipped mic and a jack-less one both attached, the
+        // one that can monitor wins - whichever order Core Audio lists them.
+        let mini = Candidate(id: 1, name: "Razer Seiren V3 Mini", hasInput: true, hasOutput: false)
+        let pro = Candidate(id: 2, name: "Razer Seiren V3 Pro", hasInput: true, hasOutput: true)
+        XCTAssertEqual(MonitorEngine.selectDevice(from: [mini, pro], match: "seiren"), pro)
+        XCTAssertEqual(MonitorEngine.selectDevice(from: [pro, mini], match: "seiren"), pro)
+    }
+
+    func testSelectDeviceMatchesNameCaseInsensitively() {
+        let mini = Candidate(id: 1, name: "RAZER SEIREN V3 MINI", hasInput: true, hasOutput: false)
+        let other = Candidate(id: 2, name: "MacBook Pro Microphone", hasInput: true, hasOutput: false)
+        XCTAssertEqual(MonitorEngine.selectDevice(from: [other, mini], match: "Seiren"), mini)
+        XCTAssertNil(MonitorEngine.selectDevice(from: [other], match: "seiren"))
+    }
+
+    func testSelectDeviceIgnoresOurOwnVirtualDevices() {
+        // "Seiren FX" and the "Seiren Voice" aggregate both contain "seiren"
+        // and are full-duplex; with the real mic unplugged they must not be
+        // adopted as the Seiren (the app would then "monitor" its own loopback
+        // and never report "No Seiren detected").
+        let fx = Candidate(id: 5, name: "Seiren FX", hasInput: true, hasOutput: true, isVirtual: true)
+        let agg = Candidate(id: 6, name: "Seiren Voice", hasInput: true, hasOutput: true, isVirtual: true)
+        XCTAssertNil(MonitorEngine.selectDevice(from: [fx, agg], match: "seiren"))
+
+        // …and a full-duplex virtual device must not outrank the real,
+        // input-only mic either.
+        let mini = Candidate(id: 7, name: "Razer Seiren V3 Mini", hasInput: true, hasOutput: false)
+        XCTAssertEqual(MonitorEngine.selectDevice(from: [fx, agg, mini], match: "seiren"), mini)
+    }
+
+    func testHeadphoneOutputDefaultsToTrueUntilAMicIsMatched() {
+        // The V3 Pro case is the default, so existing UI (volume slider) is
+        // unchanged until an input-only mic is actually matched.
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy")
+        XCTAssertTrue(engine.deviceHasHeadphoneOutput)
+        engine.setMode(.always)
+        XCTAssertTrue(engine.deviceHasHeadphoneOutput)
+        engine.shutdown()
+    }
+
     private final class DelegateSpy: MonitorEngineDelegate {
         var changeCount = 0
         func monitorEngineDidChange(_ engine: MonitorEngine) { changeCount += 1 }

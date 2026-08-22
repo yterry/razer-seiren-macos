@@ -22,6 +22,7 @@ What you expected instead.
 
 ## Environment
 
+- **Model** (V3 Pro / V3 Mini / other):
 - **Device name** (exactly as shown by `swift run seiren-probe`):
 - **VID / PID** (`ioreg -p IOUSB -l | grep -iE 'idVendor|idProduct'`):
 - **macOS version** (Apple menu → About This Mac):
@@ -36,6 +37,13 @@ every audio control). For "I hear nothing" reports, also paste what happens with
 
 ```
 swift run seiren-probe monitor swmon 0.9
+```
+
+For a mic with no headphone jack (V3 Mini) - "apps record a flat mic", "needs
+Seiren FX" - paste the output of:
+
+```
+swift run seiren-probe route
 ```
 
 <details>

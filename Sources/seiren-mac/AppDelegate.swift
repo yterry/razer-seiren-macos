@@ -16,7 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - State
 
     private var statusItem: NSStatusItem!
-    private let engine = MonitorEngine(deviceNameMatch: "seiren")
+    /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
+    /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
+    /// to exercise the menu without the hardware. Not a user setting.
+    private let engine = MonitorEngine(
+        deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren")
     private let lighting = LightingController()
     private let settings = Settings()
     private var levelSlider: NSSlider?
@@ -119,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
 
-        // 2. Permission helper, only when denied.
+        // 2. Helpers for the states only the user can fix.
         if engine.state == .permissionDenied {
             menu.addItem(disabledItem("Microphone access is required"))
             let open = NSMenuItem(title: "Open Microphone Settings…",
@@ -128,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             open.target = self
             menu.addItem(open)
         }
+        if engine.state == .needsFX { addNeedsFXItems(to: menu) }
 
         menu.addItem(.separator())
 
@@ -140,19 +145,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         menu.addItem(.separator())
 
         // 4. Volume — an embedded NSSlider. Enabled whenever monitoring isn't off.
-        menu.addItem(volumeItem(enabled: engine.mode != .off))
-
-        menu.addItem(.separator())
+        //    A jack-less mic (V3 Mini) has no monitor to set a level for, so the
+        //    slider is left out rather than shown dead.
+        if engine.deviceHasHeadphoneOutput {
+            menu.addItem(volumeItem(enabled: engine.mode != .off))
+            menu.addItem(.separator())
+        }
 
         // 5. Voice — parametric EQ (creator path; needs SeirenFX).
         menu.addItem(voiceMenuItem())
 
         menu.addItem(.separator())
 
-        // 5b. Lighting — the Chroma ring, over the vendor HID channel.
-        menu.addItem(lightingMenuItem())
-
-        menu.addItem(.separator())
+        // 5b. Lighting — the Chroma ring, over the vendor HID channel. Hidden
+        //     when the attached mic is a known model without one (V3 Mini):
+        //     controls that can never apply are worse than none.
+        if lightingApplies {
+            menu.addItem(lightingMenuItem())
+            menu.addItem(.separator())
+        }
 
         // 6. Launch at login (SMAppService, macOS 13+).
         let login = NSMenuItem(title: "Launch at Login",
@@ -171,6 +182,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         menu.addItem(quit)
 
         statusItem.menu = menu
+    }
+
+    /// Show the Lighting submenu unless the only Seiren we can see is a model
+    /// with no Chroma zone. With nothing attached it stays visible (with its
+    /// "applies when connected" caption) so a V3 Pro owner can pre-set it.
+    private var lightingApplies: Bool {
+        lighting.deviceConnected || lighting.attachedModel?.chromaLighting != false
+    }
+
+    /// Top-level helper for `.needsFX`: the attached mic has no headphone jack
+    /// and Seiren FX isn't installed, so nothing can run yet. Says why in one
+    /// line and puts the install action where the user is already looking.
+    private func addNeedsFXItems(to menu: NSMenu) {
+        menu.addItem(disabledItem("This mic has no headphone jack - it works through Seiren FX"))
+        if DriverInstaller.isBundled {
+            let install = NSMenuItem(title: "Install Seiren FX…",
+                                     action: #selector(installDriver), keyEquivalent: "")
+            install.target = self
+            menu.addItem(install)
+        } else {
+            menu.addItem(disabledItem("Install Seiren FX first (scripts/install-driver.sh)"))
+        }
     }
 
     private func modeItem(_ title: String, _ mode: MonitorEngine.Mode) -> NSMenuItem {
@@ -234,7 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             studio.isEnabled = engine.studioAvailable
             submenu.addItem(studio)
             if engine.noiseSuppression == .studio {
-                submenu.addItem(disabledItem("Studio: removes steady noise · your monitor stays low-latency"))
+                // The "monitor stays low-latency" reassurance only means
+                // something when there is a monitor.
+                submenu.addItem(disabledItem(engine.deviceHasHeadphoneOutput
+                    ? "Studio: removes steady noise · your monitor stays low-latency"
+                    : "Studio: removes steady noise · adds ~10 ms to Seiren FX"))
             }
 
             submenu.addItem(.separator())
@@ -367,7 +404,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     /// Honest one-liner about where the EQ is actually heard right now.
     private func eqReachCaption() -> String {
         if engine.isRoutingThroughFX {
-            return "Heard in your monitor + apps recording “Seiren FX”"
+            return engine.deviceHasHeadphoneOutput
+                ? "Heard in your monitor + apps recording “Seiren FX”"
+                : "Heard by apps recording “Seiren FX”"
         }
         return engine.mode == .off
             ? "Turn monitoring on to apply the EQ"
@@ -376,13 +415,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     /// Human-readable device + state line for the top of the menu / tooltip.
     private func statusLine() -> String {
+        let device = engine.connectedDeviceName ?? "Seiren"
         switch engine.state {
         case .running:
-            return "Monitoring: \(engine.connectedDeviceName ?? "Seiren")"
+            // A jack-less mic isn't being monitored - its voice is being
+            // processed into Seiren FX for other apps. Say that instead.
+            return engine.deviceHasHeadphoneOutput
+                ? "Monitoring: \(device)"
+                : "Processing: \(device) → Seiren FX"
         case .waiting:
             return "Auto: waiting for an app to use the mic"
         case .noDevice:
             return "No Seiren detected"
+        case .needsFX:
+            return "\(device) needs Seiren FX"
         case .permissionDenied:
             return "Microphone access denied"
         case .failed(let code):

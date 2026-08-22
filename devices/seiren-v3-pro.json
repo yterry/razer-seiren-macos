@@ -2,6 +2,7 @@
   "name": "Razer Seiren V3 Pro",
   "pid": 1422,
   "hidUsagePage": 65363,
+  "chromaLighting": true,
   "notes": "pid 0x058E, usagePage 0xFF53 (Razer audio). Send channel: HID interface 3, report 0x07, Feature, 64 data bytes (the Razer 'Device25' control report - see docs/PROTOCOL.md §5). Sidetone turned out to be USB-Audio-Class, so monitorOn/monitorOff stay null; the app does software monitoring instead. Lighting (12-LED Chroma ring) is fully supported over this channel and is built into the app - it needs no bytes here.",
   "commands": {
     "monitorOn": null,
