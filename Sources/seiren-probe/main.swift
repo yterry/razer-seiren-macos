@@ -19,6 +19,10 @@ import SeirenKit
 //   swift run seiren-probe monitor on 0.8   # enable + set monitor volume (0..1)
 //   swift run seiren-probe monitor hold 0.9 # start device + enable, hold until Return
 //   swift run seiren-probe monitor swmon 0.9 # software monitor (mic->headphone), hold
+//   swift run seiren-probe route [secs]     # run the app's real engine for a few seconds and
+//                                           # report what the RT proc saw (the check for
+//                                           # jack-less mics like the V3 Mini, via Seiren FX)
+//   swift run seiren-probe route 5 --device "usb audio codec"   # any input device, for dev
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
 //
 // Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
@@ -224,6 +228,86 @@ func softwareMonitor(_ dev: AudioObjectID, level: Float32) {
     AudioDeviceStop(dev, procID)
     AudioDeviceDestroyIOProcID(dev, procID)
     print("Stopped.")
+}
+
+// MARK: - route (the app's real engine, timed, with RT diagnostics)
+
+func streamCount(_ dev: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
+    objectIDs(dev, address(kAudioDevicePropertyStreams, scope)).count
+}
+
+func dBFS(_ linear: Float) -> String {
+    linear > 0 ? String(format: "%.1f dBFS", 20 * log10(linear)) : "silence (-inf dBFS)"
+}
+
+/// Run `MonitorEngine` exactly as the menu-bar app does - the creator path
+/// through Seiren FX when the driver is installed, the direct monitor
+/// otherwise - for a few seconds, then report what the real-time proc saw.
+/// This is the end-to-end check for mics without a headphone jack (V3 Mini),
+/// where `swmon` has nothing to play to: a non-zero cycle count and the
+/// expected buffer layout prove the route is up, and the input peak proves
+/// the mic is delivering signal.
+@MainActor
+func runRoute(_ args: [String]) {
+    var seconds = 5.0
+    var match = "seiren"
+    var i = 0
+    while i < args.count {
+        if args[i] == "--device", i + 1 < args.count { match = args[i + 1]; i += 2; continue }
+        if let s = Double(args[i]), s > 0 { seconds = s }
+        i += 1
+    }
+
+    let engine = MonitorEngine(deviceNameMatch: match)
+    engine.setMode(.always)
+    print("route: devices matching '\(match)', running the app's engine for \(seconds)s …")
+    // The engine is main-actor; the hotplug listener and Core Audio callbacks
+    // need the main run loop turning while we wait.
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
+
+    let d = engine.routeDiagnostics
+    let fxLine: String
+    if engine.isRoutingThroughFX {
+        fxLine = "yes"
+    } else {
+        fxLine = engine.fxAvailable ? "no (aggregate failed - direct monitor)" : "no (driver not installed)"
+    }
+    print("")
+    print("  state:          \(engine.state)")
+    print("  device:         \(engine.connectedDeviceName ?? "(none matched)")")
+    print("  headphone out:  \(engine.deviceHasHeadphoneOutput ? "yes" : "no - input-only mic")")
+    print("  via Seiren FX:  \(fxLine)")
+    print("  sample rate:    \(Int(d.sampleRate)) Hz")
+    print("  IOProc cycles:  \(d.callbacks)")
+    print("  buffers:        \(d.inputBuffers) in / \(d.outputBuffers) out " +
+          "(\(d.monitorBuffers) headphone, \(max(0, d.outputBuffers - d.monitorBuffers)) Seiren FX)")
+    print("  mic peak:       \(dBFS(d.inputPeak))")
+    print("")
+
+    switch engine.state {
+    case .running where d.callbacks == 0:
+        print("PROBLEM: the route started but the IOProc never ran. Paste this output in an issue.")
+    case .running:
+        print("OK: the route is live.")
+        if d.inputPeak == 0 {
+            print("  …but the mic delivered pure silence. Muted? (On a V3 Mini the tap-to-mute LED is red when muted.)")
+        }
+        if !engine.deviceHasHeadphoneOutput && !engine.isRoutingThroughFX {
+            print("  NOTE: input-only mic without Seiren FX - nothing can be heard or recorded.")
+        }
+    case .needsFX:
+        print("This mic has no headphone jack, so it works only through Seiren FX.")
+        print("Install the driver (sudo scripts/install-driver.sh, or Voice ▸ Install Seiren FX… in the app) and re-run.")
+    case .permissionDenied:
+        print("Microphone access denied - grant it to your terminal under System Settings → Privacy & Security → Microphone.")
+    case .noDevice:
+        print("No input device whose name contains '\(match)'. Plug the mic in, then re-run.")
+    case .failed(let code):
+        print("Core Audio error \(code) starting the route. Paste this output in an issue.")
+    case .stopped, .waiting:
+        print("Unexpected state \(engine.state).")
+    }
+    engine.shutdown()
 }
 
 // MARK: - device dump
@@ -526,6 +610,13 @@ if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "p
     exit(0)
 }
 
+// `route` drives the real engine (which does its own device lookup, and may
+// legitimately target an input-only mic the dump below can't monitor).
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "route" {
+    runRoute(Array(CommandLine.arguments.dropFirst(2)))
+    exit(0)
+}
+
 // `lighting` talks HID, not CoreAudio — handle it before the audio device lookup.
 if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "lighting" {
     runLighting(Array(CommandLine.arguments.dropFirst(2)))
@@ -547,8 +638,16 @@ if CommandLine.arguments.count >= 2,
 let devices = objectIDs(system, address(kAudioHardwarePropertyDevices))
 print("Found \(devices.count) audio devices.")
 
+/// The app's own virtual devices ("Seiren FX", the "Seiren Voice" aggregate)
+/// also contain "seiren"; only physical devices are the mic.
+func isPhysical(_ dev: AudioObjectID) -> Bool {
+    guard let t = uint32(dev, address(kAudioDevicePropertyTransportType)) else { return true }
+    return t != kAudioDeviceTransportTypeAggregate && t != kAudioDeviceTransportTypeVirtual
+}
+
 let seirens = devices.filter {
     (cfString($0, address(kAudioObjectPropertyName)) ?? "").lowercased().contains("seiren")
+        && isPhysical($0)
 }
 
 if seirens.isEmpty {
@@ -571,11 +670,18 @@ let level: Float32? = (setMode && args.count >= 4) ? Float32(args[3]) : nil
 for dev in seirens {
     let name = cfString(dev, address(kAudioObjectPropertyName)) ?? "??"
     let uid = cfString(dev, address(kAudioDevicePropertyDeviceUID)) ?? "??"
+    let inputs = streamCount(dev, kAudioObjectPropertyScopeInput)
+    let outputs = streamCount(dev, kAudioObjectPropertyScopeOutput)
     print("\n========================================================")
     print("Device: \(name)   (AudioObjectID \(dev))")
     print("UID: \(uid)")
+    print("Streams: \(inputs) input / \(outputs) output" +
+          (outputs == 0 ? "  — input-only (no headphone jack): use `seiren-probe route`" : ""))
     print("========================================================")
-    if holdMode {
+    if (holdMode || swMode) && outputs == 0 {
+        print("  This device has no output stream, so there is nothing to monitor to.")
+        print("  For a jack-less mic (V3 Mini) check the Seiren FX route instead: swift run seiren-probe route")
+    } else if holdMode {
         startAndHold(dev, level: level ?? 0.9)
     } else if swMode {
         softwareMonitor(dev, level: level ?? 0.9)
