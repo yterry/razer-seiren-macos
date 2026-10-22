@@ -315,15 +315,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // and ignores our `isEnabled`.
         submenu.autoenablesItems = false
 
-        if !engine.fxAvailable {
-            if DriverInstaller.isBundled {
+        let fxAvailable = engine.fxAvailable
+        let updateAvailable = DriverInstaller.updateAvailable
+        if updateAvailable {
+            let update = NSMenuItem(title: "Update Seiren FX…",
+                                    action: #selector(installDriver), keyEquivalent: "")
+            update.target = self
+            submenu.addItem(update)
+            submenu.addItem(disabledItem("A newer Seiren FX comes with this app"))
+            if fxAvailable { submenu.addItem(.separator()) }
+        }
+
+        if !fxAvailable {
+            if DriverInstaller.isBundled && !updateAvailable {
                 let install = NSMenuItem(title: "Install Seiren FX…",
                                          action: #selector(installDriver), keyEquivalent: "")
                 install.target = self
                 install.isEnabled = true
                 submenu.addItem(install)
                 submenu.addItem(disabledItem("Enables EQ in OBS / Zoom / Discord"))
-            } else {
+            } else if !DriverInstaller.isBundled {
                 submenu.addItem(disabledItem("Build the Seiren FX driver to use EQ"))
                 submenu.addItem(disabledItem("(see the README — scripts/build-driver.sh)"))
             }
@@ -437,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         } else {
             let candidates = NSWorkspace.shared.runningApplications.filter { app in
                 guard app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-                      let id = app.bundleIdentifier else { return false }
+                      let id = app.bundleIdentifier, !MixerEngine.isWebAppShim(bundleID: id) else { return false }
                 return id != Bundle.main.bundleIdentifier && !appChannels.contains { $0.source == .app(bundleID: id) }
             }.sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
             var seen: Set<String> = []

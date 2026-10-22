@@ -158,6 +158,32 @@ package enum AudioDevices {
         return Int(size) / MemoryLayout<AudioObjectID>.size
     }
 
+    /// Declare every stream in one direction before starting an IOProc. The
+    /// HAL preserves buffer indices and supplies NULL mData for disabled
+    /// streams. This variable-length C structure has one trailing UInt32 per
+    /// stream; its IOProc field takes the ID returned by CreateIOProcID.
+    package static func setIOProcStreamUsage(_ dev: AudioObjectID, proc: AudioDeviceIOProcID,
+        scope: AudioObjectPropertyScope, enabled: [Bool]) -> OSStatus {
+        guard !enabled.isEmpty else { return kAudioHardwareBadPropertySizeError }
+        let size = MemoryLayout<AudioHardwareIOProcStreamUsage>.size
+            + (enabled.count - 1) * MemoryLayout<UInt32>.size
+        let storage = UnsafeMutableRawPointer.allocate(byteCount: size,
+            alignment: MemoryLayout<AudioHardwareIOProcStreamUsage>.alignment)
+        defer { storage.deallocate() }
+        let usage = storage.bindMemory(to: AudioHardwareIOProcStreamUsage.self, capacity: 1)
+        usage.initialize(to: AudioHardwareIOProcStreamUsage(
+            mIOProc: unsafeBitCast(proc, to: UnsafeMutableRawPointer.self),
+            mNumberStreams: UInt32(enabled.count), mStreamIsOn: 0))
+        let offset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
+        for (index, on) in enabled.enumerated() {
+            storage.storeBytes(of: on ? UInt32(1) : UInt32(0),
+                toByteOffset: offset + index * MemoryLayout<UInt32>.size, as: UInt32.self)
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyIOProcStreamUsage,
+            mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(dev, &address, 0, nil, UInt32(size), storage)
+    }
+
     /// Best-effort: shrink the device's I/O buffer toward `frames` (clamped to
     /// the device's advertised min/max) to cut monitoring latency. Non-fatal.
     package static func setBufferFrameSize(_ dev: AudioObjectID, _ frames: UInt32) {

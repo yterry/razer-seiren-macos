@@ -90,28 +90,52 @@ public final class MixerEngine {
         }
     }
 
-    /// The outermost app owns helpers inside nested app bundles. A resolver
-    /// keeps attribution deterministic in tests; production reads Info.plist
-    /// through Foundation Bundle, without introducing AppKit into SeirenKit.
+    /// Choose the innermost enclosing app that has a channel. Browser helpers
+    /// fall back to their outer app, while nested apps such as Simulator can
+    /// have their own channel. Nil means Desktop audio owns the process.
     nonisolated package static func owningAppBundleID(
-        bundleID: String?, executablePath: String?,
+        bundleID: String?, executablePath: String?, channelBundleIDs: Set<String>,
         bundleIdentifier: (String) -> String? = { Bundle(path: $0)?.bundleIdentifier }
     ) -> String? {
-        // WebKit exposes no public responsible-app identity. Attribute these
-        // services to Safari, including WebKit audio used by other host apps.
+        // WebKit exposes no public responsible-app identity. A Safari channel
+        // includes these services even when another host app uses WebKit audio.
         if bundleID == "com.apple.WebKit.GPU" || bundleID == "com.apple.WebKit.WebContent" {
-            return "com.apple.Safari"
+            return channelBundleIDs.contains("com.apple.Safari") ? "com.apple.Safari" : nil
         }
         if let executablePath {
             var path = ""
+            var apps: [String] = []
             for component in (executablePath as NSString).pathComponents {
                 path = (path as NSString).appendingPathComponent(component)
-                if component.lowercased().hasSuffix(".app") {
-                    return bundleIdentifier(path) ?? bundleID
-                }
+                if component.lowercased().hasSuffix(".app") { apps.append(path) }
+            }
+            for app in apps.reversed() {
+                if let id = bundleIdentifier(app), channelBundleIDs.contains(id) { return id }
             }
         }
-        return bundleID
+        return bundleID.flatMap { channelBundleIDs.contains($0) ? $0 : nil }
+    }
+
+    nonisolated package static func channelProcesses(bundleIDs: [String],
+        byApp: [String: Set<AudioObjectID>], excluding recorders: Set<AudioObjectID>
+    ) -> [Set<AudioObjectID>] {
+        bundleIDs.map { (byApp[$0] ?? []).subtracting(recorders) }
+    }
+
+    nonisolated package static func shouldIgnoreRecorder(bundleID: String?, appBundleID: String?) -> Bool {
+        appBundleID == "com.yterry.seiren-mac" && bundleID == appBundleID
+    }
+
+    /// Browser web-app shims produce audio in the browser's processes, so a
+    /// channel for the shim itself would always be silent.
+    nonisolated package static func isWebAppShim(bundleID: String) -> Bool {
+        if bundleID.hasPrefix("com.apple.Safari.WebApp") { return true }
+        guard let separator = bundleID.range(of: ".app.") else { return false }
+        let browser = String(bundleID[..<separator.lowerBound])
+        return ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser",
+                "org.chromium.Chromium"].contains {
+            browser == $0 || browser.hasPrefix($0 + ".")
+        }
     }
 
     nonisolated package static func runPolicy(enabled: Bool, supportedOS: Bool,
@@ -152,13 +176,30 @@ public final class MixerEngine {
         return result
     }
 
-    private struct Snapshot: Equatable {
+    package struct Snapshot: Equatable, Sendable {
         var fx: AudioObjectID
         var mix: AudioObjectID
         var rate: Double
+        var appBundleIDs: [String]
         var apps: [Set<AudioObjectID>]
         var recorders: Set<AudioObjectID>
         var ownProcess: AudioObjectID
+    }
+
+    package struct StartFailure {
+        var snapshot: Snapshot
+        var time: TimeInterval
+
+        static func recording(result: State, snapshot: Snapshot, now: TimeInterval) -> StartFailure? {
+            guard case .failed = result else { return nil }
+            return StartFailure(snapshot: snapshot, time: now)
+        }
+    }
+
+    nonisolated package static func shouldRetryStart(snapshot: Snapshot, failure: StartFailure?,
+                                                    now: TimeInterval) -> Bool {
+        guard let failure, failure.snapshot == snapshot else { return true }
+        return now - failure.time >= 5
     }
 
     private struct Listener {
@@ -175,6 +216,7 @@ public final class MixerEngine {
     private var fxObserved: AudioObjectID?
     private var mixObserved: AudioObjectID?
     private var snapshot: Snapshot?
+    private var startFailure: StartFailure?
     private var aggregate: AudioObjectID?
     private var proc: AudioDeviceIOProcID?
     private var tapIDs: [AudioObjectID] = []
@@ -220,8 +262,14 @@ public final class MixerEngine {
         guard normalized != self.channels else { return }
         let sourcesChanged = normalized.map(\.source) != self.channels.map(\.source)
         self.channels = normalized
-        publishGains()
-        if sourcesChanged { teardown(); snapshot = nil; reconcile() }
+        if sourcesChanged {
+            teardown()
+            snapshot = nil
+            owners.removeAll()
+            reconcile()
+        } else {
+            publishGains()
+        }
         notify()
     }
 
@@ -274,7 +322,9 @@ public final class MixerEngine {
             fxObserved = fx; mixObserved = mix
             notify()
         }
-        let recorders = mix.map { AudioDevices.recordingProcesses(fromAny: [$0]) ?? [] } ?? []
+        let recorders = (mix.map { AudioDevices.recordingProcesses(fromAny: [$0]) ?? [] } ?? []).filter {
+            !Self.shouldIgnoreRecorder(bundleID: $0.bundleID, appBundleID: Bundle.main.bundleIdentifier)
+        }
         let desired = Self.runPolicy(enabled: isEnabled, supportedOS: Self.supportedOS,
             hasFX: fx != nil, hasStreamMix: mix != nil,
             hasRecorders: runWithoutRecorder || !recorders.isEmpty)
@@ -287,10 +337,15 @@ public final class MixerEngine {
             teardown(); state = .failed(kAudioHardwareBadObjectError)
             return
         }
+        let appBundleIDs = channels.compactMap { channel -> String? in
+            guard case .app(let id) = channel.source else { return nil }
+            return id
+        }
+        let channelIDs = Set(appBundleIDs)
         var byApp: [String: Set<AudioObjectID>] = [:]
-        let objects = AudioDevices.processObjects()
-        // A process object lives exactly as long as its process, so its owner
-        // is resolved once instead of re-reading app bundles on every poll.
+        let objects = Set(AudioDevices.processObjects())
+        // Cache ownership for each process and channel list. Changing channels
+        // clears this cache because a nested app may now own its own audio.
         owners = owners.filter { objects.contains($0.key) }
         for object in objects {
             let owner: String?
@@ -299,23 +354,30 @@ public final class MixerEngine {
             } else {
                 let pid = AudioDevices.processPID(object)
                 owner = Self.owningAppBundleID(bundleID: AudioDevices.processBundleID(object),
-                    executablePath: pid.flatMap { AudioDevices.executablePath($0) })
-                owners[object] = owner
+                    executablePath: pid.flatMap { AudioDevices.executablePath($0) },
+                    channelBundleIDs: channelIDs)
+                owners.updateValue(owner, forKey: object)
             }
             if let owner { byApp[owner, default: []].insert(object) }
         }
-        let appProcesses = channels.compactMap { channel -> Set<AudioObjectID>? in
-            guard case .app(let id) = channel.source else { return nil }
-            return byApp[id] ?? []
-        }
-        let current = Snapshot(fx: fx, mix: mix, rate: AudioDevices.nominalRate(fx),
-            apps: appProcesses, recorders: Set(recorders.map(\.objectID)), ownProcess: ownProcess)
-        guard current != snapshot || devicesChanged else { return }
+        let recorderObjects = Set(recorders.map(\.objectID))
+        let appProcesses = Self.channelProcesses(bundleIDs: appBundleIDs, byApp: byApp, excluding: recorderObjects)
+        let current = Snapshot(fx: fx, mix: mix, rate: AudioDevices.nominalRate(fx), appBundleIDs: appBundleIDs,
+            apps: appProcesses, recorders: recorderObjects, ownProcess: ownProcess)
+        // A coreaudiod restart can hand out the same IDs, so "running with the
+        // same inputs" only counts while our aggregate still exists.
+        if current == snapshot, state == .running, let aggregate, AudioDevices.isAlive(aggregate) { return }
+        // Creating/destroying our aggregate and taps also fires listeners. Keep
+        // the failure across idle/teardown so every entry point obeys backoff.
+        guard Self.shouldRetryStart(snapshot: current, failure: startFailure,
+                                    now: ProcessInfo.processInfo.systemUptime) else { return }
         teardown()
         snapshot = current
         let status = start(current)
         if status == noErr { state = .running }
         else { teardown(); state = .failed(status) }
+        startFailure = StartFailure.recording(result: state, snapshot: current,
+                                              now: ProcessInfo.processInfo.systemUptime)
     }
 
     @available(macOS 14.2, *)
@@ -394,6 +456,19 @@ public final class MixerEngine {
         let procStatus = AudioDeviceCreateIOProcID(device, seiren_mixer_proc(), UnsafeMutableRawPointer(dsp), &proc)
         guard procStatus == noErr, let proc else { return procStatus == noErr ? kAudioHardwareUnspecifiedError : procStatus }
         self.proc = proc
+        // Unused streams must be disabled at the HAL, not merely ignored in
+        // the callback: otherwise another Seiren instance sees us recording
+        // Stream Mix and keeps both mixers running indefinitely.
+        let inputStreams = AudioDevices.streamCount(device, scope: kAudioObjectPropertyScopeInput)
+        let outputStreams = AudioDevices.streamCount(device, scope: kAudioObjectPropertyScopeOutput)
+        let inputUsage = (0..<inputStreams).map { !map.ignoredInputs.contains($0) }
+        let outputUsage = (0..<outputStreams).map { $0 >= fxOutputs }
+        let inputStatus = AudioDevices.setIOProcStreamUsage(device, proc: proc,
+            scope: kAudioObjectPropertyScopeInput, enabled: inputUsage)
+        guard inputStatus == noErr else { return inputStatus }
+        let outputStatus = AudioDevices.setIOProcStreamUsage(device, proc: proc,
+            scope: kAudioObjectPropertyScopeOutput, enabled: outputUsage)
+        guard outputStatus == noErr else { return outputStatus }
         return AudioDeviceStart(device, proc)
     }
 

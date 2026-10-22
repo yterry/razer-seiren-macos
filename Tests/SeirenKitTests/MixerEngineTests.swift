@@ -47,19 +47,91 @@ final class MixerEngineTests: XCTestCase {
         XCTAssertEqual(MixerEngine.Channel(source: .voice, name: "Voice", level: .nan).gain, 0)
     }
 
-    func testProcessAttribution() {
+    func testProcessAttributionSelectsInnermostChannel() {
         let bundles = ["/Applications/Chrome.app": "com.google.Chrome",
-                       "/Applications/Outer.app": "outer"]
-        func owner(_ id: String?, _ path: String?) -> String? {
-            MixerEngine.owningAppBundleID(bundleID: id, executablePath: path) { bundles[$0] }
+                       "/Applications/Chrome.app/Contents/Frameworks/Helper.app": "chrome.helper",
+                       "/Applications/Xcode.app": "com.apple.dt.Xcode",
+                       "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app": "com.apple.iphonesimulator"]
+        let chrome = "/Applications/Chrome.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"
+        let simulator = "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"
+        func owner(_ id: String?, _ path: String?, _ channels: Set<String>) -> String? {
+            MixerEngine.owningAppBundleID(bundleID: id, executablePath: path,
+                                          channelBundleIDs: channels) { bundles[$0] }
         }
-        XCTAssertEqual(owner("helper", "/Applications/Chrome.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"), "com.google.Chrome")
-        XCTAssertEqual(owner("inner", "/Applications/Outer.app/Contents/Inner.app/Contents/MacOS/Inner"), "outer")
-        XCTAssertEqual(owner("plain", "/usr/bin/plain"), "plain")
-        XCTAssertEqual(owner("com.apple.WebKit.GPU", "/System/Library/XPCServices/GPU"), "com.apple.Safari")
-        XCTAssertEqual(owner("com.apple.WebKit.WebContent", nil), "com.apple.Safari")
-        XCTAssertNil(owner(nil, "/usr/bin/plain"))
-        XCTAssertEqual(owner(nil, "/Applications/Outer.app/Contents/MacOS/Outer"), "outer")
+        XCTAssertEqual(owner("chrome.helper", chrome, ["com.google.Chrome"]), "com.google.Chrome")
+        XCTAssertEqual(owner("chrome.helper", chrome, ["chrome.helper", "com.google.Chrome"]), "chrome.helper")
+        XCTAssertEqual(owner("com.apple.iphonesimulator", simulator,
+                             ["com.apple.dt.Xcode", "com.apple.iphonesimulator"]), "com.apple.iphonesimulator")
+        XCTAssertEqual(owner("com.apple.iphonesimulator", simulator, ["com.apple.dt.Xcode"]), "com.apple.dt.Xcode")
+        XCTAssertEqual(owner("plain", "/usr/bin/plain", ["plain"]), "plain")
+        XCTAssertEqual(owner("fallback", "/Applications/Unknown.app/Contents/MacOS/Unknown", ["fallback"]), "fallback")
+        XCTAssertNil(owner("plain", "/usr/bin/plain", []))
+        XCTAssertNil(owner(nil, "/usr/bin/plain", ["plain"]))
+        XCTAssertNil(owner("chrome.helper", chrome, ["other"]))
+        XCTAssertEqual(owner(nil, chrome, ["com.google.Chrome"]), "com.google.Chrome")
+    }
+
+    func testWebKitUsesSafariChannelOnlyWhenPresent() {
+        for id in ["com.apple.WebKit.GPU", "com.apple.WebKit.WebContent"] {
+            XCTAssertEqual(MixerEngine.owningAppBundleID(bundleID: id, executablePath: nil,
+                channelBundleIDs: ["com.apple.Safari"]), "com.apple.Safari")
+            XCTAssertNil(MixerEngine.owningAppBundleID(bundleID: id, executablePath: nil,
+                channelBundleIDs: ["other", id]))
+        }
+    }
+
+    func testAppChannelsExcludeEveryStreamMixRecorder() {
+        let byApp: [String: Set<AudioObjectID>] = ["chrome": [10, 11, 12], "obs": [20], "music": [30]]
+        XCTAssertEqual(MixerEngine.channelProcesses(bundleIDs: ["chrome", "obs", "music", "closed"],
+            byApp: byApp, excluding: [11, 20]), [[10, 12], [], [30], []])
+        XCTAssertEqual(MixerEngine.channelProcesses(bundleIDs: ["chrome"], byApp: byApp,
+                                                    excluding: []), [[10, 11, 12]])
+    }
+
+    func testMixerIgnoresOtherSeirenRecordersOnlyInBundledApp() {
+        XCTAssertTrue(MixerEngine.shouldIgnoreRecorder(bundleID: "com.yterry.seiren-mac",
+                                                        appBundleID: "com.yterry.seiren-mac"))
+        for (bundle, app) in [("com.yterry.seiren-mac", nil), (nil, "com.yterry.seiren-mac"),
+                              ("obs", "com.yterry.seiren-mac"), ("other", "other")] {
+            XCTAssertFalse(MixerEngine.shouldIgnoreRecorder(bundleID: bundle, appBundleID: app))
+        }
+    }
+
+    func testWebAppShimsCannotBeAdded() {
+        for id in ["com.google.Chrome.app.webapp", "com.google.Chrome.canary.app.webapp",
+                   "com.microsoft.edgemac.app.webapp", "com.brave.Browser.app.webapp",
+                   "org.chromium.Chromium.app.webapp", "com.apple.Safari.WebApp.webapp"] {
+            XCTAssertTrue(MixerEngine.isWebAppShim(bundleID: id), id)
+        }
+        for id in ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser",
+                   "com.apple.Safari", "com.apple.iphonesimulator", "com.electron.app.Player",
+                   "com.google.ChromeOther.app.Player"] {
+            XCTAssertFalse(MixerEngine.isWebAppShim(bundleID: id), id)
+        }
+    }
+
+    func testStartRetryBackoffAppliesToSameInputsAndClearsOnSuccess() {
+        let inputs = MixerEngine.Snapshot(fx: 1, mix: 2, rate: 48000,
+            appBundleIDs: ["chrome"], apps: [[3]], recorders: [4], ownProcess: 5)
+        let failure = MixerEngine.StartFailure.recording(result: .failed(-1), snapshot: inputs, now: 100)
+        XCTAssertNotNil(failure)
+        for (time, expected) in [(100.0, false), (104.999, false), (105.0, true), (106.0, true)] {
+            XCTAssertEqual(MixerEngine.shouldRetryStart(snapshot: inputs, failure: failure, now: time), expected)
+        }
+        var changed = [MixerEngine.Snapshot]()
+        var next = inputs; next.fx = 6; changed.append(next)
+        next = inputs; next.mix = 6; changed.append(next)
+        next = inputs; next.rate = 96000; changed.append(next)
+        next = inputs; next.appBundleIDs = ["safari"]; changed.append(next)
+        next = inputs; next.apps = [[6]]; changed.append(next)
+        next = inputs; next.recorders = [6]; changed.append(next)
+        next = inputs; next.ownProcess = 6; changed.append(next)
+        for snapshot in changed {
+            XCTAssertTrue(MixerEngine.shouldRetryStart(snapshot: snapshot, failure: failure, now: 100))
+        }
+        let cleared = MixerEngine.StartFailure.recording(result: .running, snapshot: inputs, now: 101)
+        XCTAssertNil(cleared)
+        XCTAssertTrue(MixerEngine.shouldRetryStart(snapshot: inputs, failure: cleared, now: 101))
     }
 
     func testRunPolicy() {
@@ -203,6 +275,25 @@ final class MixerDSPTests: XCTestCase {
         XCTAssertEqual(seiren_mixer_input_buffers(mixer), 1)
         XCTAssertEqual(seiren_mixer_output_buffers(mixer), 3)
         XCTAssertEqual(seiren_mixer_output_peak(mixer), 0)
+    }
+
+    func testDisabledStreamsCanHaveNullBuffers() throws {
+        let mixer = try XCTUnwrap(seiren_mixer_create(48000, 1))
+        defer { seiren_mixer_destroy(mixer) }
+        seiren_mixer_map_input(mixer, 0, 0)
+        seiren_mixer_map_input(mixer, 2, 1)
+        seiren_mixer_set_gain(mixer, 0, 1)
+        seiren_mixer_set_gain(mixer, 1, 1)
+        let input = buffers([0.1, 10, 0.2])
+        let output = buffers([1, 1])
+        input[1].mData = nil   // Stream Mix input disabled at the HAL
+        output[0].mData = nil // FX output disabled at the HAL
+        seiren_mixer_process(mixer, input.unsafePointer, output.unsafeMutablePointer)
+        seiren_mixer_process(mixer, input.unsafePointer, output.unsafeMutablePointer)
+        for sample in samples(output, 1) { XCTAssertEqual(sample, 0.3, accuracy: 0.00001) }
+        XCTAssertEqual(seiren_mixer_input_peak(mixer, 1), 0)
+        XCTAssertEqual(seiren_mixer_input_buffers(mixer), 3)
+        XCTAssertEqual(seiren_mixer_output_buffers(mixer), 2)
     }
 
     func testMonoDuplicatesAndShortInputZerosTail() throws {
