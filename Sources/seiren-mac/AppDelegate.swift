@@ -602,6 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func lightingBrightnessItem() -> NSMenuItem {
         let item = NSMenuItem()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
+        container.autoresizingMask = [.width]   // the menu sizes it to its own width
 
         let label = NSTextField(labelWithString: "Brightness")
         label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
@@ -613,6 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               minValue: 0, maxValue: 100,
                               target: self, action: #selector(lightingBrightnessChanged(_:)))
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
         // Not continuous: each change talks to the device, so send on release.
         slider.isContinuous = false
         slider.isEnabled = true
@@ -686,6 +688,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func volumeItem(enabled: Bool) -> NSMenuItem {
         let item = NSMenuItem()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
+        container.autoresizingMask = [.width]   // the menu sizes it to its own width
 
         let label = NSTextField(labelWithString: "Volume")
         label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
@@ -697,6 +700,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               minValue: 0, maxValue: 1,
                               target: self, action: #selector(levelChanged(_:)))
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
         slider.isContinuous = true
         slider.isEnabled = enabled
         slider.toolTip = "Headphone monitor volume"
@@ -926,6 +930,7 @@ private final class MixerChannelView: NSView {
         self.changed = changed
         slider = NSSlider(value: Double(channel.level), minValue: 0, maxValue: 1, target: nil, action: nil)
         super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 44))
+        autoresizingMask = [.width]   // the menu sizes the row to its own width
         let image = NSImageView(frame: NSRect(x: 14, y: 24, width: 16, height: 16))
         image.image = icon
         image.imageScaling = .scaleProportionallyDown
@@ -933,19 +938,23 @@ private final class MixerChannelView: NSView {
         nameLabel.frame = NSRect(x: 36, y: 24, width: 108, height: 16)
         nameLabel.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.autoresizingMask = [.width]
         addSubview(nameLabel)
         valueLabel.frame = NSRect(x: 144, y: 24, width: 58, height: 16)
         valueLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         valueLabel.alignment = .right
         valueLabel.textColor = .secondaryLabelColor
+        valueLabel.autoresizingMask = [.minXMargin]
         addSubview(valueLabel)
         mute.frame = NSRect(x: 204, y: 22, width: 24, height: 20)
         mute.isBordered = false
         mute.imagePosition = .imageOnly
+        mute.autoresizingMask = [.minXMargin]
         mute.target = self
         mute.action = #selector(toggleMute)
         addSubview(mute)
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
         slider.isContinuous = true
         slider.target = self
         slider.action = #selector(levelChanged)
@@ -960,6 +969,9 @@ private final class MixerChannelView: NSView {
         nameLabel.stringValue = channel.name
         valueLabel.stringValue = channel.muted ? "Muted" : "\(Int((channel.level * 100).rounded()))%"
         slider.doubleValue = Double(channel.level)
+        // A muted channel keeps its level for when it comes back; dimming the
+        // slider shows that it isn't reaching the stream right now.
+        slider.alphaValue = channel.muted ? 0.4 : 1
         slider.setAccessibilityLabel("\(channel.name) level on stream")
         mute.image = NSImage(systemSymbolName: channel.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                              accessibilityDescription: nil)
