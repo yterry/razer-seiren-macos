@@ -48,6 +48,12 @@ up automatically - no per-model code. A model with a headphone jack gets
 monitoring; every model gets the EQ and noise suppression, delivered to other
 apps through **Seiren FX**.
 
+**Unplugged the Seiren mid-call?** Apps recording Seiren FX keep hearing you.
+With no Seiren connected, the app feeds Seiren FX from your Mac's default mic
+instead, with the same EQ and noise suppression, and switches back as soon as the
+Seiren returns.
+See [When the Seiren is unplugged](#when-the-seiren-is-unplugged-input).
+
 **Seiren V3 Mini owners:** the Mini has no headphone jack, so there is nothing
 to monitor into - the app's job for it is the **EQ + noise suppression**, sent to
 OBS / Zoom / Discord through Seiren FX. The menu says so the first time
@@ -146,6 +152,28 @@ in, and quietly waits when it's unplugged. Then shape and clean your voice under
   "On — always".)*
 - **Off**: not monitoring.
 
+### When the Seiren is unplugged (Input)
+
+Once Zoom, Discord, or OBS records **Seiren FX**, unplugging the Seiren used to
+leave them silent until you noticed and switched mics.
+Now Seiren FX keeps carrying your voice from another mic:
+
+- **🎙 → Input ▸ Automatic** (the default) uses your Seiren whenever one is
+  connected.
+  Without one, it uses your Mac's default input (never Seiren FX itself), then
+  the built-in mic, and switches back the moment the Seiren returns.
+- Pick a specific mic under **Input ▸** to process that one instead.
+  While it is unplugged, Automatic takes over.
+- Another mic runs only while an app records from Seiren FX, in both
+  **On — always** and **Auto**, so the macOS recording indicator stays off the
+  rest of the time.
+  The first line of the menu says which mic Seiren FX is using.
+- Another mic gets the EQ and noise suppression but no headphone monitoring:
+  hearing yourself needs the Seiren's own headphone jack.
+
+This needs Seiren FX installed (see below), because Seiren FX is how other apps
+receive the processed voice.
+
 ### Voice EQ — and making other apps hear it (Seiren FX)
 
 The app includes a **parametric voice EQ** with built-in presets —
@@ -237,6 +265,8 @@ swift test                         # unit tests (SeirenKit)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls
 swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw
+swift run seiren-probe inputs      # list inputs and which one Automatic would pick
+swift run seiren-probe listen "Seiren FX"   # what other apps hear on Seiren FX, per second
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
@@ -262,6 +292,8 @@ the real-time audio thread.
   into Seiren FX only - the engine notices the missing output at runtime, so
   there is no model list to maintain. The app's own virtual devices (Seiren FX,
   its private aggregate) are excluded even though their names match.
+  With no Seiren connected, the same route runs from another physical input
+  (the Input menu), into Seiren FX only.
 
 The core lives in **`SeirenKit`** (no AppKit, fully testable):
 
@@ -360,12 +392,14 @@ clears its quarantine flag automatically.)
 Sources/
   SeirenKit/         model-independent core (no AppKit, fully testable)
     MonitorEngine.swift   IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
+    AudioDevices.swift    Core Audio device + recording-process queries
     EQEngine.swift        RBJ-cookbook coefficient math + voice presets
     ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
   SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler
   RNNoise/           vendored xiph/rnnoise (BSD-3) — the "Studio" denoiser
   seiren-mac/        the menu-bar agent (main.swift + AppDelegate): 🎙 menu —
-                     modes, Level, Voice ▸ (EQ + noise suppression), Seiren FX install
+                     modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
+                     Seiren FX install
   seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
 Driver/SeirenFX/     the loopback virtual audio device (AudioServerPlugIn)
 docs/
@@ -399,6 +433,14 @@ swift build
 - Confirm the Seiren is selected as a usable device — `swift run seiren-probe`
   should list a device whose name contains "Seiren".
 - Confirm your headphones are in the **Seiren's** jack, not the Mac's.
+
+**Apps on Seiren FX hear my Mac's mic instead of the Seiren.**
+
+- The app didn't find the Seiren, so Automatic fell back to another mic (the
+  menu's first line names it).
+  `swift run seiren-probe inputs` lists every input and which one Automatic
+  picks; the Seiren must appear there as eligible.
+- Check that **Input ▸** is set to **Automatic** or to the Seiren.
 
 **V3 Mini: the menu says “needs Seiren FX” / apps record a flat mic.**
 

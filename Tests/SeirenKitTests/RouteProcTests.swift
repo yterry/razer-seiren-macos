@@ -27,6 +27,7 @@ final class RouteProcTests: XCTestCase {
     }
 
     override func tearDown() {
+        gMonitorEnabled = true
         gMonitorOutBuffers = 1   // the V3 Pro default other code assumes
         for l in lists { l.unsafeMutablePointer.deallocate() }
         for p in allocations { p.deallocate() }
@@ -70,7 +71,8 @@ final class RouteProcTests: XCTestCase {
         // only output buffer is Seiren FX and must carry the unity broadcast -
         // not the level-scaled monitor, which would quietly attenuate what
         // OBS/Zoom record.
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy")
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
         engine.level = 0.25
         gMonitorOutBuffers = 0
         let frames = 64
@@ -86,7 +88,8 @@ final class RouteProcTests: XCTestCase {
 
     func testHeadphoneMicSplitsMonitorAndBroadcast() {
         // V3 Pro layout: buffer 0 = headphones (× level), buffer 1 = Seiren FX.
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy")
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
         engine.level = 0.25
         gMonitorOutBuffers = 1
         let frames = 64
@@ -101,6 +104,21 @@ final class RouteProcTests: XCTestCase {
         XCTAssertEqual(samples(outputs, 1, frames: frames),
                        [Float](repeating: 0.5, count: frames),
                        "Seiren FX gets the broadcast at unity")
+    }
+
+    func testFallbackHeadsetSilencesItsOutputAndBroadcastsToFX() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.level = 0.25
+        gMonitorOutBuffers = 1
+        gMonitorEnabled = false
+        let frames = 64
+        let inputs = bufferList(count: 1, frames: frames, fill: 0.5)
+        let outputs = bufferList(count: 2, frames: frames, fill: 0.9)
+
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(samples(outputs, 0, frames: frames), [Float](repeating: 0, count: frames))
+        XCTAssertEqual(samples(outputs, 1, frames: frames), [Float](repeating: 0.5, count: frames))
     }
 
     func testStereoInputUsesChannelZeroAndZeroesTrailingFrames() {
@@ -123,7 +141,8 @@ final class RouteProcTests: XCTestCase {
     }
 
     func testDiagnosticsReportLayoutAndPeak() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy")
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
         gMonitorOutBuffers = 0
         let inputs = bufferList(count: 2, frames: 16, fill: 0.5)   // mic + FX's own input
         let outputs = bufferList(count: 1, frames: 16, fill: 0)

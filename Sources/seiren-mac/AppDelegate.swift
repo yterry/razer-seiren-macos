@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         engine.setEQPreset(settings.eqPreset)
         engine.setEQEnabled(settings.eqEnabled)
         engine.setNoiseSuppression(settings.noiseSuppression)
+        engine.setInputPreference(settings.inputPreference)
 
         // Lighting: watch for the device; only touch its lights if the user has
         // configured lighting before (state is volatile across replugs).
@@ -88,6 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     nonisolated func monitorEngineDidChange(_ engine: MonitorEngine) {
         Task { @MainActor in
+            if case .device(let uid) = engine.inputPreference,
+               let input = engine.availableInputs.first(where: { $0.uid == uid }) {
+                self.settings.inputSourceName = input.name
+            }
             self.rebuildMenu()
             self.configureStatusButtonImage()
         }
@@ -122,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
+        if engine.state == .waiting, engine.activeSource?.isSeiren == false {
+            menu.addItem(disabledItem("Starts when an app records from Seiren FX"))
+        }
 
         // 2. Helpers for the states only the user can fix.
         if engine.state == .permissionDenied {
@@ -153,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
 
         // 5. Voice — parametric EQ (creator path; needs SeirenFX).
+        menu.addItem(inputMenuItem())
         menu.addItem(voiceMenuItem())
 
         menu.addItem(.separator())
@@ -211,6 +220,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         item.target = self
         item.state = (engine.mode == mode) ? .on : .off
         item.representedObject = mode.rawValue
+        return item
+    }
+
+    private func inputMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Input", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        let automatic = NSMenuItem(title: "Automatic", action: #selector(selectInput(_:)), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = engine.inputPreference == .automatic ? .on : .off
+        submenu.addItem(automatic)
+        submenu.addItem(disabledItem("Seiren first, then your default mic"))
+        submenu.addItem(.separator())
+        let fxAvailable = engine.fxAvailable
+        for input in engine.availableInputs {
+            let choice = NSMenuItem(title: input.name, action: #selector(selectInput(_:)), keyEquivalent: "")
+            choice.target = self
+            choice.representedObject = input.uid
+            choice.state = engine.inputPreference == .device(uid: input.uid) ? .on : .off
+            choice.isEnabled = input.isSeiren || fxAvailable
+            submenu.addItem(choice)
+        }
+        if case .device(let uid) = engine.inputPreference,
+           !engine.availableInputs.contains(where: { $0.uid == uid }) {
+            let name = settings.inputSourceName ?? uid
+            let missing = disabledItem("\(name) (not connected)")
+            missing.state = .on
+            submenu.addItem(missing)
+        }
+        if !fxAvailable {
+            submenu.addItem(disabledItem("Other mics need Seiren FX (see Voice)"))
+        }
+        item.submenu = submenu
         return item
     }
 
@@ -415,7 +457,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     /// Human-readable device + state line for the top of the menu / tooltip.
     private func statusLine() -> String {
-        let device = engine.connectedDeviceName ?? "Seiren"
+        let device = engine.activeSource?.name ?? "Seiren"
+        if engine.activeSource?.isSeiren == false {
+            switch engine.state {
+            case .running:
+                return engine.inputPreference == .automatic
+                    ? "No Seiren · Seiren FX is using \(device)"
+                    : "Processing: \(device) → Seiren FX"
+            case .waiting:
+                return engine.inputPreference == .automatic
+                    ? "No Seiren · Seiren FX will use \(device)"
+                    : "Standby: \(device) → Seiren FX"
+            default: break
+            }
+        }
         switch engine.state {
         case .running:
             // A jack-less mic isn't being monitored - its voice is being
@@ -426,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case .waiting:
             return "Auto: waiting for an app to use the mic"
         case .noDevice:
-            return "No Seiren detected"
+            return engine.fxAvailable ? "No microphone detected" : "No Seiren detected"
         case .needsFX:
             return "\(device) needs Seiren FX"
         case .permissionDenied:
@@ -434,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case .failed(let code):
             return String(format: "Audio error (%d)", code)
         case .stopped:
-            return engine.connectedDeviceName.map { "Ready: \($0)" } ?? "Monitoring off"
+            return engine.activeSource.map { "Ready: \($0.name)" } ?? "Monitoring off"
         }
     }
 
@@ -470,6 +525,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     // MARK: - Actions
+
+    @objc private func selectInput(_ sender: NSMenuItem) {
+        let preference: MonitorEngine.InputPreference
+        if let uid = sender.representedObject as? String {
+            preference = .device(uid: uid)
+            settings.inputSourceName = engine.availableInputs.first { $0.uid == uid }?.name
+        } else {
+            preference = .automatic
+        }
+        settings.inputPreference = preference
+        engine.setInputPreference(preference)
+        rebuildMenu()
+        configureStatusButtonImage()
+    }
 
     @objc private func selectMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,

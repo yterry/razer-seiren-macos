@@ -12,6 +12,8 @@ final class Settings {
     private enum Key {
         static let schemaVersion = "schemaVersion"
         static let mode          = "monitorMode"        // MonitorEngine.Mode.rawValue
+        static let inputSource   = "input.source"
+        static let inputName     = "input.sourceName"
         static let level         = "monitorLevel"       // Double 0...1
         static let eqEnabled     = "voice.eq.enabled"   // Bool
         static let eqPreset      = "voice.eq.preset"    // EQPreset.name
@@ -24,8 +26,8 @@ final class Settings {
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
     /// v3 = lighting keys (absence = "never touched the lights");
-    /// v4 = brand-green -> LED-green fixup.
-    static let currentSchema = 4
+    /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic).
+    static let currentSchema = 5
 
     init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -65,6 +67,26 @@ final class Settings {
     var mode: MonitorEngine.Mode {
         get { defaults.string(forKey: Key.mode).flatMap(MonitorEngine.Mode.init(rawValue:)) ?? .off }
         set { defaults.set(newValue.rawValue, forKey: Key.mode) }
+    }
+
+    var inputPreference: MonitorEngine.InputPreference {
+        get {
+            guard let uid = defaults.string(forKey: Key.inputSource), uid != "automatic" else {
+                return .automatic
+            }
+            return .device(uid: uid)
+        }
+        set {
+            switch newValue {
+            case .automatic: defaults.set("automatic", forKey: Key.inputSource)
+            case .device(let uid): defaults.set(uid, forKey: Key.inputSource)
+            }
+        }
+    }
+
+    var inputSourceName: String? {
+        get { defaults.string(forKey: Key.inputName) }
+        set { defaults.set(newValue, forKey: Key.inputName) }
     }
 
     /// Persisted monitor level, or nil if the user never set one.
