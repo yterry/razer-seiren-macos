@@ -172,7 +172,11 @@ Now Seiren FX keeps carrying your voice from another mic:
   hearing yourself needs the Seiren's own headphone jack.
 
 This needs Seiren FX installed (see below), because Seiren FX is how other apps
-receive the processed voice.
+receive the processed voice, and macOS 14 or later, which can tell the app when
+another app starts recording.
+On macOS 13 only a Seiren is used, as before.
+Automatic never picks a line-level input such as a capture card, unless it is
+your Mac's default input.
 
 ### Voice EQ — and making other apps hear it (Seiren FX)
 
@@ -473,6 +477,9 @@ swift build
       supported: EQ + noise suppression through Seiren FX, with the monitor
       controls and Lighting menu out of the way. `swift run seiren-probe route`
       is the one-command check.
+- [x] **Input fallback** - with the Seiren unplugged, Seiren FX keeps carrying
+      your voice from your Mac's default mic, so apps set to Seiren FX don't go
+      silent; **🎙 → Input ▸** picks any mic explicitly.
 
 **Next:**
 

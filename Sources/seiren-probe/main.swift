@@ -364,6 +364,8 @@ func runInputs() {
         print("\(device.name)\(device.id == defaultID ? " (system default input)" : "")")
         print("  UID: \(device.uid)")
         print("  transport: \(transport), streams: \(ins) in / \(outs) out")
+        let terminal = device.inputTerminalType.map(fourCC) ?? "unknown"
+        print("  input terminal: \(terminal), microphone: \(device.isMicrophone ? "yes" : "no")")
         // Only an eligible device can be the Seiren; Seiren FX matches the name.
         let isSeiren = device.isEligible && device.isSeiren(match: "seiren")
         print("  \(reason), Seiren: \(isSeiren ? "yes" : "no")")
@@ -372,7 +374,8 @@ func runInputs() {
     print("System default input: \(defaultName) [\(defaultUID ?? "no UID")]")
     let fx = AudioDevices.fxDevice() != nil
     let source = MonitorEngine.selectSource(from: candidates, preference: .automatic,
-                                            defaultInputUID: defaultUID, match: "seiren", fxInstalled: fx)
+                                            defaultInputUID: defaultUID, match: "seiren", fxInstalled: fx,
+                                            otherInputsSupported: AudioDevices.recordingProcessesSupported)
     print("Seiren FX installed: \(fx ? "yes" : "no")")
     print("Automatic: \(source.map { "\($0.device.name) [\($0.device.uid)]" } ?? "(no source)")")
 }

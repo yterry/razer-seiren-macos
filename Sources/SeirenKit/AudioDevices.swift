@@ -32,8 +32,29 @@ package enum AudioDevices {
                 hasOutput: hasStreams(dev, scope: kAudioObjectPropertyScopeOutput),
                 isVirtual: transport == kAudioDeviceTransportTypeAggregate
                     || transport == kAudioDeviceTransportTypeVirtual,
-                isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn)
+                isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn,
+                inputTerminalType: firstInputTerminalType(dev))
         }
+    }
+
+    /// Use the first input stream: it is the stream the voice IOProc reads.
+    /// An unknown terminal must not turn a capture card into an automatic mic.
+    package static func firstInputTerminalType(_ dev: AudioObjectID) -> UInt32? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(dev, &addr, 0, nil, &size) == noErr,
+              size >= MemoryLayout<AudioObjectID>.size else { return nil }
+        var streams = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &streams) == noErr,
+              let first = streams.first else { return nil }
+        return readUInt32(first, kAudioStreamPropertyTerminalType)
+    }
+
+    package static func isAlive(_ dev: AudioObjectID) -> Bool {
+        readUInt32(dev, kAudioDevicePropertyDeviceIsAlive) == 1
     }
 
     package static func fxDevice() -> AudioObjectID? {
@@ -143,6 +164,11 @@ package enum AudioDevices {
         mSelector: kAudioHardwarePropertyProcessObjectList,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
+
+    package static var recordingProcessesSupported: Bool {
+        var addr = processListAddress
+        return AudioObjectHasProperty(AudioObjectID(kAudioObjectSystemObject), &addr)
+    }
 
     /// Set `SEIREN_MONITOR_DEBUG=1` to log Auto-mode detection to stderr.
     private static let debugAuto = ProcessInfo.processInfo.environment["SEIREN_MONITOR_DEBUG"] != nil

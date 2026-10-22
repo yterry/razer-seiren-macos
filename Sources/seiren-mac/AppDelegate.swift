@@ -239,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             choice.target = self
             choice.representedObject = input.uid
             choice.state = engine.inputPreference == .device(uid: input.uid) ? .on : .off
-            choice.isEnabled = input.isSeiren || fxAvailable
+            choice.isEnabled = input.isSeiren || (fxAvailable && engine.otherInputsSupported)
             submenu.addItem(choice)
         }
         if case .device(let uid) = engine.inputPreference,
@@ -249,7 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             missing.state = .on
             submenu.addItem(missing)
         }
-        if !fxAvailable {
+        if !engine.otherInputsSupported {
+            submenu.addItem(disabledItem("Other mics need macOS 14 or later"))
+        } else if !fxAvailable {
             submenu.addItem(disabledItem("Other mics need Seiren FX (see Voice)"))
         }
         item.submenu = submenu
@@ -481,7 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case .waiting:
             return "Auto: waiting for an app to use the mic"
         case .noDevice:
-            return engine.fxAvailable ? "No microphone detected" : "No Seiren detected"
+            return engine.fxAvailable && engine.otherInputsSupported ? "No microphone detected" : "No Seiren detected"
         case .needsFX:
             return "\(device) needs Seiren FX"
         case .permissionDenied:
