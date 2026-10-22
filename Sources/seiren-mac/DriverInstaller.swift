@@ -23,6 +23,23 @@ enum DriverInstaller {
     static var isBundled: Bool { bundledDriverURL != nil }
     static var isInstalled: Bool { FileManager.default.fileExists(atPath: installedPath) }
 
+    static var bundledVersion: String? { bundledDriverURL.flatMap(driverVersion) }
+    static var installedVersion: String? { driverVersion(URL(fileURLWithPath: installedPath)) }
+
+    static var updateAvailable: Bool {
+        guard let bundledVersion else { return false }
+        guard let installedVersion else { return isInstalled }
+        return bundledVersion.compare(installedVersion, options: .numeric) == .orderedDescending
+    }
+
+    private static func driverVersion(_ url: URL) -> String? {
+        let plist = url.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return nil }
+        return info["CFBundleShortVersionString"] as? String
+    }
+
     enum Result {
         case ok
         case cancelled
