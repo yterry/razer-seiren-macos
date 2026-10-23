@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Shown in the macOS "system audio" permission prompt the first time the
+	     Stream Mixer taps other apps' audio (Core Audio process taps, 14.2+). -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>When the Stream Mixer is on, Seiren mixes the audio of your apps into Seiren Stream Mix for your streaming app. Nothing is recorded or saved.</string>
+
 	<!-- Shown in the macOS Microphone permission prompt. REQUIRED: without an
 	     NSMicrophoneUsageDescription reachable by the running binary, the
 	     AVCaptureDevice mic prompt does not appear (the request is denied and,

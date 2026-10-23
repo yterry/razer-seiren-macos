@@ -558,9 +558,7 @@ public final class MonitorEngine {
         let fxChanged = fx != observedFXDeviceID
         observedFXDeviceID = fx
         defer { if fxChanged { notify() } }
-        let streamMix = AudioDevices.allDevices().first {
-            AudioDevices.deviceUID($0) == Self.streamMixDeviceUID
-        }
+        let streamMix = AudioDevices.streamMixDevice()
         updateRecorderListeners(devices: Set([fx, streamMix].compactMap { $0 }))
         let inputs = candidates.filter(\.isEligible)
         availableInputs = (inputs.filter { $0.isSeiren(match: deviceNameMatch) }
@@ -869,6 +867,7 @@ public final class MonitorEngine {
         package var isEligible: Bool {
             hasInput && !isVirtual && uid != MonitorEngine.fxDeviceUID
                 && uid != MonitorEngine.streamMixDeviceUID && uid != MonitorEngine.aggregateUID
+                && uid != MixerEngine.aggregateUID
         }
 
         package func isSeiren(match: String) -> Bool {

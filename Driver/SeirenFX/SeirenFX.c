@@ -1,18 +1,22 @@
 //
 //  SeirenFX.c
-//  SeirenFX — a minimal loopback CoreAudio virtual audio device (AudioServerPlugIn).
+//  SeirenFX - minimal loopback CoreAudio virtual audio devices (AudioServerPlugIn).
 //
 //  Part of Seiren for macOS (https://github.com/yterry/razer-seiren-macos), MIT-licensed.
 //
 //  WHAT THIS IS
 //  ------------
-//  A HAL "AudioServerPlugIn" that publishes one virtual device, "Seiren FX",
-//  with a stereo input stream and a stereo output stream wired together as a
+//  A HAL "AudioServerPlugIn" that publishes two virtual devices, each with a
+//  stereo input stream and a stereo output stream wired together as a
 //  loopback: whatever an app *plays* to the output appears on the input for
 //  other apps to *record*. The seiren-mac menu-bar app reads the real Razer
 //  Seiren microphone, applies DSP (EQ, noise suppression), and plays the
-//  processed audio into this device's output; OBS / Zoom / Discord select
+//  processed audio into "Seiren FX"'s output; Zoom / Discord select
 //  "Seiren FX" as their input and therefore record the processed voice.
+//
+//  "Seiren Stream Mix" carries the processed voice mixed with other apps'
+//  audio by the menu-bar app. OBS records its input for streaming, while
+//  "Seiren FX" remains voice-only. Each device has its own loopback and clock.
 //
 //  This is the only way to make our software DSP reach *other apps* on macOS
 //  (CoreAudio gives apps the raw hardware mic directly; there is no system
@@ -23,16 +27,19 @@
 //  ----------
 //  This file is original code written against Apple's *public* AudioServerPlugIn
 //  API (the same API documented in Apple's "NullAudio" sample). It deliberately
-//  does NOT derive from BlackHole or any GPL source — seiren-mac is MIT and must
+//  does NOT derive from BlackHole or any GPL source - seiren-mac is MIT and must
 //  stay MIT. The loopback ring-buffer technique is the obvious implementation of
 //  the public DoIOOperation contract.
 //
-//  OBJECT MODEL (no Box — the device is always published)
+//  OBJECT MODEL (no Box - both devices are always published)
 //  ------------------------------------------------------
 //    kObjectID_PlugIn (1)
-//      └─ kObjectID_Device (2)            "Seiren FX"
-//           ├─ kObjectID_Stream_Input (3)   (what other apps record)
-//           └─ kObjectID_Stream_Output (4)  (what our app plays into)
+//      ├─ kObjectID_Device (2)                  "Seiren FX"
+//      │    ├─ kObjectID_Stream_Input (3)         (voice recording)
+//      │    └─ kObjectID_Stream_Output (4)        (processed voice)
+//      └─ kObjectID_StreamMix_Device (5)         "Seiren Stream Mix"
+//           ├─ kObjectID_StreamMix_Input (6)      (stream recording)
+//           └─ kObjectID_StreamMix_Output (7)     (voice + other apps)
 //
 //  Audio format: interleaved stereo Float32, default 48 kHz.
 //
@@ -54,6 +61,9 @@
 #define kDevice_Manufacturer    "seiren-mac"
 #define kDevice_UID             "SeirenFX:Device:0"
 #define kDevice_ModelUID        "SeirenFX:Model"
+#define kStreamMix_Name         "Seiren Stream Mix"
+#define kStreamMix_UID          "SeirenFX:StreamMix"
+#define kStreamMix_ModelUID     "SeirenFX:StreamMix:Model"
 
 #define kChannelsPerFrame       2u
 #define kBitsPerChannel         32u
@@ -64,10 +74,13 @@
 #define kRingFrames             65536u
 
 enum {
-    kObjectID_PlugIn        = kAudioObjectPlugInObject, // 1
-    kObjectID_Device        = 2,
-    kObjectID_Stream_Input  = 3,
-    kObjectID_Stream_Output = 4
+    kObjectID_PlugIn           = kAudioObjectPlugInObject, // 1
+    kObjectID_Device           = 2,
+    kObjectID_Stream_Input     = 3,
+    kObjectID_Stream_Output    = 4,
+    kObjectID_StreamMix_Device = 5,
+    kObjectID_StreamMix_Input  = 6,
+    kObjectID_StreamMix_Output = 7
 };
 
 // The set of sample rates we advertise. Default is 48 kHz (the Seiren's rate).
@@ -81,18 +94,64 @@ static pthread_mutex_t          gStateMutex  = PTHREAD_MUTEX_INITIALIZER;
 
 static UInt32   gPlugIn_RefCount  = 0;
 
-static Float64  gSampleRate       = 48000.0;
-static UInt32   gIO_RunningCount  = 0;   // how many clients have StartIO'd
-static Boolean  gStream_Input_IsActive  = true;
-static Boolean  gStream_Output_IsActive = true;
+typedef struct {
+    AudioObjectID deviceID;
+    AudioObjectID inputStreamID;
+    AudioObjectID outputStreamID;
+    CFStringRef name;
+    CFStringRef uid;
+    CFStringRef modelUID;
 
-// Zero-timestamp bookkeeping.
-static Float64  gHostTicksPerFrame = 0.0;
-static UInt64   gAnchorHostTime    = 0;
-static volatile UInt64 gNumberTimeStamps = 0;
+    Float64 sampleRate;
+    UInt32 ioRunningCount;   // how many clients have StartIO'd
+    Boolean inputIsActive;
+    Boolean outputIsActive;
 
-// The loopback ring. Interleaved Float32, kRingFrames * kChannelsPerFrame.
-static Float32* gRing = NULL;
+    // Zero-timestamp bookkeeping.
+    Float64 hostTicksPerFrame;
+    UInt64 anchorHostTime;
+    volatile UInt64 numberTimeStamps;
+
+    // Interleaved Float32, kRingFrames * kChannelsPerFrame.
+    Float32* ring;
+} SeirenFX_Device;
+
+static SeirenFX_Device gDevices[] = {
+    {
+        .deviceID = kObjectID_Device,
+        .inputStreamID = kObjectID_Stream_Input,
+        .outputStreamID = kObjectID_Stream_Output,
+        .name = CFSTR(kDevice_Name),
+        .uid = CFSTR(kDevice_UID),
+        .modelUID = CFSTR(kDevice_ModelUID),
+        .sampleRate = 48000.0,
+        .inputIsActive = true,
+        .outputIsActive = true
+    },
+    {
+        .deviceID = kObjectID_StreamMix_Device,
+        .inputStreamID = kObjectID_StreamMix_Input,
+        .outputStreamID = kObjectID_StreamMix_Output,
+        .name = CFSTR(kStreamMix_Name),
+        .uid = CFSTR(kStreamMix_UID),
+        .modelUID = CFSTR(kStreamMix_ModelUID),
+        .sampleRate = 48000.0,
+        .inputIsActive = true,
+        .outputIsActive = true
+    }
+};
+#define kNumDevices (sizeof(gDevices) / sizeof(gDevices[0]))
+
+// Device and stream callbacks share the same state lookup; the plug-in has none.
+static SeirenFX_Device* SeirenFX_DeviceForObjectID(AudioObjectID inObjectID)
+{
+    for (UInt32 i = 0; i < kNumDevices; i++) {
+        SeirenFX_Device* device = &gDevices[i];
+        if (inObjectID == device->deviceID || inObjectID == device->inputStreamID || inObjectID == device->outputStreamID)
+            return device;
+    }
+    return NULL;
+}
 
 #pragma mark - Forward declarations (interface methods)
 
@@ -212,17 +271,25 @@ static OSStatus SeirenFX_Initialize(AudioServerPlugInDriverRef inDriver, AudioSe
     struct mach_timebase_info tb;
     mach_timebase_info(&tb);
     Float64 hostTicksPerSecond = ((Float64)tb.denom / (Float64)tb.numer) * 1.0e9;
-    gHostTicksPerFrame = hostTicksPerSecond / gSampleRate;
+    pthread_mutex_lock(&gStateMutex);
+    for (UInt32 i = 0; i < kNumDevices; i++) {
+        SeirenFX_Device* device = &gDevices[i];
+        device->hostTicksPerFrame = hostTicksPerSecond / device->sampleRate;
 
-    // Allocate (and clear) the loopback ring once.
-    if (gRing == NULL) {
-        gRing = (Float32*)calloc((size_t)kRingFrames * kChannelsPerFrame, sizeof(Float32));
-        if (gRing == NULL) return kAudioHardwareUnspecifiedError;
+        // Allocate (and clear) each loopback ring once.
+        if (device->ring == NULL) {
+            device->ring = (Float32*)calloc((size_t)kRingFrames * kChannelsPerFrame, sizeof(Float32));
+            if (device->ring == NULL) {
+                pthread_mutex_unlock(&gStateMutex);
+                return kAudioHardwareUnspecifiedError;
+            }
+        }
     }
+    pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
 
-// We publish a fixed device, so dynamic device creation/destruction is N/A.
+// We publish fixed devices, so dynamic device creation/destruction is N/A.
 static OSStatus SeirenFX_CreateDevice(AudioServerPlugInDriverRef inDriver, CFDictionaryRef inDescription, const AudioServerPlugInClientInfo* inClientInfo, AudioObjectID* outDeviceObjectID)
 {
     (void)inDriver; (void)inDescription; (void)inClientInfo; (void)outDeviceObjectID;
@@ -231,19 +298,27 @@ static OSStatus SeirenFX_CreateDevice(AudioServerPlugInDriverRef inDriver, CFDic
 
 static OSStatus SeirenFX_DestroyDevice(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID)
 {
-    (void)inDriver; (void)inDeviceObjectID;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return kAudioHardwareUnsupportedOperationError;
 }
 
 static OSStatus SeirenFX_AddDeviceClient(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, const AudioServerPlugInClientInfo* inClientInfo)
 {
-    (void)inDriver; (void)inDeviceObjectID; (void)inClientInfo;
+    (void)inClientInfo;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return noErr;
 }
 
 static OSStatus SeirenFX_RemoveDeviceClient(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, const AudioServerPlugInClientInfo* inClientInfo)
 {
-    (void)inDriver; (void)inDeviceObjectID; (void)inClientInfo;
+    (void)inClientInfo;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return noErr;
 }
 
@@ -251,7 +326,8 @@ static OSStatus SeirenFX_PerformDeviceConfigurationChange(AudioServerPlugInDrive
 {
     (void)inChangeInfo;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     // We encode the requested sample rate as the change action.
     Float64 newRate = (Float64)inChangeAction;
@@ -262,18 +338,21 @@ static OSStatus SeirenFX_PerformDeviceConfigurationChange(AudioServerPlugInDrive
     if (!supported) return kAudioHardwareIllegalOperationError;
 
     pthread_mutex_lock(&gStateMutex);
-    gSampleRate = newRate;
+    device->sampleRate = newRate;
     struct mach_timebase_info tb;
     mach_timebase_info(&tb);
     Float64 hostTicksPerSecond = ((Float64)tb.denom / (Float64)tb.numer) * 1.0e9;
-    gHostTicksPerFrame = hostTicksPerSecond / gSampleRate;
+    device->hostTicksPerFrame = hostTicksPerSecond / device->sampleRate;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
 
 static OSStatus SeirenFX_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, UInt64 inChangeAction, void* inChangeInfo)
 {
-    (void)inDriver; (void)inDeviceObjectID; (void)inChangeAction; (void)inChangeInfo;
+    (void)inChangeAction; (void)inChangeInfo;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return noErr;
 }
 
@@ -320,6 +399,7 @@ static Boolean SeirenFX_HasProperty(AudioServerPlugInDriverRef inDriver, AudioOb
             return false;
 
         case kObjectID_Device:
+        case kObjectID_StreamMix_Device:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:
                 case kAudioObjectPropertyClass:
@@ -350,6 +430,8 @@ static Boolean SeirenFX_HasProperty(AudioServerPlugInDriverRef inDriver, AudioOb
             }
             return false;
 
+        case kObjectID_StreamMix_Input:
+        case kObjectID_StreamMix_Output:
         case kObjectID_Stream_Input:
         case kObjectID_Stream_Output:
             switch (inAddress->mSelector) {
@@ -379,11 +461,16 @@ static OSStatus SeirenFX_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
     (void)inClientPID;
     if (inDriver != gDriverRef || inAddress == NULL || outIsSettable == NULL) return kAudioHardwareIllegalOperationError;
 
+    if (inObjectID != kObjectID_PlugIn && SeirenFX_DeviceForObjectID(inObjectID) == NULL) return kAudioHardwareBadObjectError;
+
     *outIsSettable = false;
     switch (inObjectID) {
         case kObjectID_Device:
+        case kObjectID_StreamMix_Device:
             if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) *outIsSettable = true;
             break;
+        case kObjectID_StreamMix_Input:
+        case kObjectID_StreamMix_Output:
         case kObjectID_Stream_Input:
         case kObjectID_Stream_Output:
             switch (inAddress->mSelector) {
@@ -412,16 +499,17 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
                 case kAudioObjectPropertyClass:                   *outDataSize = sizeof(AudioClassID); return noErr;
                 case kAudioObjectPropertyOwner:                   *outDataSize = sizeof(AudioObjectID); return noErr;
                 case kAudioObjectPropertyManufacturer:            *outDataSize = sizeof(CFStringRef); return noErr;
-                case kAudioObjectPropertyOwnedObjects:            *outDataSize = sizeof(AudioObjectID); return noErr; // [device]
+                case kAudioObjectPropertyOwnedObjects:            *outDataSize = (UInt32)(kNumDevices * sizeof(AudioObjectID)); return noErr; // [devices]
                 case kAudioPlugInPropertyBoxList:                 *outDataSize = 0; return noErr;                      // no boxes
                 case kAudioPlugInPropertyTranslateUIDToBox:       *outDataSize = sizeof(AudioObjectID); return noErr;
-                case kAudioPlugInPropertyDeviceList:              *outDataSize = sizeof(AudioObjectID); return noErr; // [device]
+                case kAudioPlugInPropertyDeviceList:              *outDataSize = (UInt32)(kNumDevices * sizeof(AudioObjectID)); return noErr; // [devices]
                 case kAudioPlugInPropertyTranslateUIDToDevice:    *outDataSize = sizeof(AudioObjectID); return noErr;
                 case kAudioPlugInPropertyResourceBundle:          *outDataSize = sizeof(CFStringRef); return noErr;
             }
             return kAudioHardwareUnknownPropertyError;
 
         case kObjectID_Device:
+        case kObjectID_StreamMix_Device:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:               *outDataSize = sizeof(AudioClassID); return noErr;
                 case kAudioObjectPropertyClass:                   *outDataSize = sizeof(AudioClassID); return noErr;
@@ -462,6 +550,8 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
             }
             return kAudioHardwareUnknownPropertyError;
 
+        case kObjectID_StreamMix_Input:
+        case kObjectID_StreamMix_Output:
         case kObjectID_Stream_Input:
         case kObjectID_Stream_Output:
             switch (inAddress->mSelector) {
@@ -490,6 +580,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
     (void)inClientPID;
     if (inDriver != gDriverRef || inAddress == NULL || outDataSize == NULL || outData == NULL) return kAudioHardwareIllegalOperationError;
 
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inObjectID);
     switch (inObjectID) {
         case kObjectID_PlugIn:
             switch (inAddress->mSelector) {
@@ -502,24 +593,28 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                 case kAudioObjectPropertyManufacturer:
                     *((CFStringRef*)outData) = CFSTR(kDevice_Manufacturer); *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioObjectPropertyOwnedObjects:
-                    if (inDataSize >= sizeof(AudioObjectID)) {
-                        ((AudioObjectID*)outData)[0] = kObjectID_Device; *outDataSize = sizeof(AudioObjectID);
-                    } else { *outDataSize = 0; }
-                    return noErr;
+                case kAudioPlugInPropertyDeviceList: {
+                    AudioObjectID* list = (AudioObjectID*)outData;
+                    UInt32 max = inDataSize / sizeof(AudioObjectID);
+                    UInt32 n = 0;
+                    for (UInt32 i = 0; i < kNumDevices && n < max; i++)
+                        list[n++] = gDevices[i].deviceID;
+                    *outDataSize = n * sizeof(AudioObjectID); return noErr;
+                }
                 case kAudioPlugInPropertyBoxList:
                     *outDataSize = 0; return noErr;
                 case kAudioPlugInPropertyTranslateUIDToBox:
                     *((AudioObjectID*)outData) = kAudioObjectUnknown; *outDataSize = sizeof(AudioObjectID); return noErr;
-                case kAudioPlugInPropertyDeviceList:
-                    if (inDataSize >= sizeof(AudioObjectID)) {
-                        ((AudioObjectID*)outData)[0] = kObjectID_Device; *outDataSize = sizeof(AudioObjectID);
-                    } else { *outDataSize = 0; }
-                    return noErr;
                 case kAudioPlugInPropertyTranslateUIDToDevice: {
                     AudioObjectID found = kAudioObjectUnknown;
                     if (inQualifierDataSize == sizeof(CFStringRef) && inQualifierData != NULL) {
                         CFStringRef uid = *((CFStringRef*)inQualifierData);
-                        if (uid && CFStringCompare(uid, CFSTR(kDevice_UID), 0) == kCFCompareEqualTo) found = kObjectID_Device;
+                        for (UInt32 i = 0; uid && i < kNumDevices; i++) {
+                            if (CFStringCompare(uid, gDevices[i].uid, 0) == kCFCompareEqualTo) {
+                                found = gDevices[i].deviceID;
+                                break;
+                            }
+                        }
                     }
                     *((AudioObjectID*)outData) = found; *outDataSize = sizeof(AudioObjectID); return noErr;
                 }
@@ -529,6 +624,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
             return kAudioHardwareUnknownPropertyError;
 
         case kObjectID_Device:
+        case kObjectID_StreamMix_Device:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:
                     *((AudioClassID*)outData) = kAudioObjectClassID; *outDataSize = sizeof(AudioClassID); return noErr;
@@ -537,7 +633,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                 case kAudioObjectPropertyOwner:
                     *((AudioObjectID*)outData) = kObjectID_PlugIn; *outDataSize = sizeof(AudioObjectID); return noErr;
                 case kAudioObjectPropertyName:
-                    *((CFStringRef*)outData) = CFSTR(kDevice_Name); *outDataSize = sizeof(CFStringRef); return noErr;
+                    *((CFStringRef*)outData) = device->name; *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioObjectPropertyManufacturer:
                     *((CFStringRef*)outData) = CFSTR(kDevice_Manufacturer); *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioObjectPropertyOwnedObjects:
@@ -546,20 +642,20 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     UInt32 max = inDataSize / sizeof(AudioObjectID);
                     UInt32 n = 0;
                     if ((inAddress->mScope == kAudioObjectPropertyScopeInput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
-                        list[n++] = kObjectID_Stream_Input;
+                        list[n++] = device->inputStreamID;
                     if ((inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
-                        list[n++] = kObjectID_Stream_Output;
+                        list[n++] = device->outputStreamID;
                     *outDataSize = n * sizeof(AudioObjectID); return noErr;
                 }
                 case kAudioDevicePropertyDeviceUID:
-                    *((CFStringRef*)outData) = CFSTR(kDevice_UID); *outDataSize = sizeof(CFStringRef); return noErr;
+                    *((CFStringRef*)outData) = device->uid; *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioDevicePropertyModelUID:
-                    *((CFStringRef*)outData) = CFSTR(kDevice_ModelUID); *outDataSize = sizeof(CFStringRef); return noErr;
+                    *((CFStringRef*)outData) = device->modelUID; *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioDevicePropertyTransportType:
                     *((UInt32*)outData) = kAudioDeviceTransportTypeVirtual; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyRelatedDevices:
                     if (inDataSize >= sizeof(AudioObjectID)) {
-                        ((AudioObjectID*)outData)[0] = kObjectID_Device; *outDataSize = sizeof(AudioObjectID);
+                        ((AudioObjectID*)outData)[0] = device->deviceID; *outDataSize = sizeof(AudioObjectID);
                     } else { *outDataSize = 0; }
                     return noErr;
                 case kAudioDevicePropertyClockDomain:
@@ -568,14 +664,15 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     *((UInt32*)outData) = 1; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyDeviceIsRunning: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((UInt32*)outData) = (gIO_RunningCount > 0) ? 1 : 0;
+                    *((UInt32*)outData) = (device->ioRunningCount > 0) ? 1 : 0;
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(UInt32); return noErr;
                 }
                 case kAudioDevicePropertyDeviceCanBeDefaultDevice:
-                    *((UInt32*)outData) = 1; *outDataSize = sizeof(UInt32); return noErr;
+                    // Global uses the input answer; loopbacks must not be default speakers.
+                    *((UInt32*)outData) = (inAddress->mScope == kAudioObjectPropertyScopeInput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) ? 1 : 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
-                    *((UInt32*)outData) = 1; *outDataSize = sizeof(UInt32); return noErr;
+                    *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyLatency:
                     *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioObjectPropertyControlList:
@@ -584,7 +681,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyNominalSampleRate: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((Float64*)outData) = gSampleRate;
+                    *((Float64*)outData) = device->sampleRate;
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(Float64); return noErr;
                 }
@@ -620,19 +717,21 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
             }
             return kAudioHardwareUnknownPropertyError;
 
+        case kObjectID_StreamMix_Input:
+        case kObjectID_StreamMix_Output:
         case kObjectID_Stream_Input:
         case kObjectID_Stream_Output: {
-            Boolean isInput = (inObjectID == kObjectID_Stream_Input);
+            Boolean isInput = (inObjectID == device->inputStreamID);
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:
                     *((AudioClassID*)outData) = kAudioObjectClassID; *outDataSize = sizeof(AudioClassID); return noErr;
                 case kAudioObjectPropertyClass:
                     *((AudioClassID*)outData) = kAudioStreamClassID; *outDataSize = sizeof(AudioClassID); return noErr;
                 case kAudioObjectPropertyOwner:
-                    *((AudioObjectID*)outData) = kObjectID_Device; *outDataSize = sizeof(AudioObjectID); return noErr;
+                    *((AudioObjectID*)outData) = device->deviceID; *outDataSize = sizeof(AudioObjectID); return noErr;
                 case kAudioStreamPropertyIsActive: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((UInt32*)outData) = (isInput ? gStream_Input_IsActive : gStream_Output_IsActive) ? 1 : 0;
+                    *((UInt32*)outData) = (isInput ? device->inputIsActive : device->outputIsActive) ? 1 : 0;
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(UInt32); return noErr;
                 }
@@ -648,7 +747,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                 case kAudioStreamPropertyVirtualFormat:
                 case kAudioStreamPropertyPhysicalFormat: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((AudioStreamBasicDescription*)outData) = SeirenFX_MakeFormat(gSampleRate);
+                    *((AudioStreamBasicDescription*)outData) = SeirenFX_MakeFormat(device->sampleRate);
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(AudioStreamBasicDescription); return noErr;
                 }
@@ -679,8 +778,10 @@ static OSStatus SeirenFX_SetPropertyData(AudioServerPlugInDriverRef inDriver, Au
     (void)inClientPID; (void)inQualifierDataSize; (void)inQualifierData;
     if (inDriver != gDriverRef || inAddress == NULL || inData == NULL) return kAudioHardwareIllegalOperationError;
 
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inObjectID);
     switch (inObjectID) {
         case kObjectID_Device:
+        case kObjectID_StreamMix_Device:
             if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) {
                 if (inDataSize < sizeof(Float64)) return kAudioHardwareBadPropertySizeError;
                 Float64 requested = *((const Float64*)inData);
@@ -691,24 +792,26 @@ static OSStatus SeirenFX_SetPropertyData(AudioServerPlugInDriverRef inDriver, Au
 
                 Boolean changed;
                 pthread_mutex_lock(&gStateMutex);
-                changed = (requested != gSampleRate);
+                changed = (requested != device->sampleRate);
                 pthread_mutex_unlock(&gStateMutex);
                 // Apply asynchronously through the host so the HAL can quiesce IO.
                 if (changed && gPlugIn_Host != NULL)
-                    gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, (UInt64)requested, NULL);
+                    gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, device->deviceID, (UInt64)requested, NULL);
                 return noErr;
             }
             return kAudioHardwareUnknownPropertyError;
 
+        case kObjectID_StreamMix_Input:
+        case kObjectID_StreamMix_Output:
         case kObjectID_Stream_Input:
         case kObjectID_Stream_Output: {
-            Boolean isInput = (inObjectID == kObjectID_Stream_Input);
+            Boolean isInput = (inObjectID == device->inputStreamID);
             switch (inAddress->mSelector) {
                 case kAudioStreamPropertyIsActive: {
                     if (inDataSize < sizeof(UInt32)) return kAudioHardwareBadPropertySizeError;
                     Boolean active = (*((const UInt32*)inData) != 0);
                     pthread_mutex_lock(&gStateMutex);
-                    if (isInput) gStream_Input_IsActive = active; else gStream_Output_IsActive = active;
+                    if (isInput) device->inputIsActive = active; else device->outputIsActive = active;
                     pthread_mutex_unlock(&gStateMutex);
                     return noErr;
                 }
@@ -722,7 +825,7 @@ static OSStatus SeirenFX_SetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                         if (kSupportedSampleRates[i] == fmt->mSampleRate) { supported = true; break; }
                     if (!supported) return kAudioHardwareIllegalOperationError;
                     if (gPlugIn_Host != NULL)
-                        gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, (UInt64)fmt->mSampleRate, NULL);
+                        gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, device->deviceID, (UInt64)fmt->mSampleRate, NULL);
                     return noErr;
                 }
             }
@@ -738,17 +841,18 @@ static OSStatus SeirenFX_StartIO(AudioServerPlugInDriverRef inDriver, AudioObjec
 {
     (void)inClientID;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
-    if (gIO_RunningCount == 0) {
+    if (device->ioRunningCount == 0) {
         // First client: reset the timeline and clear stale loopback audio.
-        gNumberTimeStamps = 0;
-        gAnchorHostTime = mach_absolute_time();
-        if (gRing != NULL)
-            memset(gRing, 0, (size_t)kRingFrames * kChannelsPerFrame * sizeof(Float32));
+        device->numberTimeStamps = 0;
+        device->anchorHostTime = mach_absolute_time();
+        if (device->ring != NULL)
+            memset(device->ring, 0, (size_t)kRingFrames * kChannelsPerFrame * sizeof(Float32));
     }
-    gIO_RunningCount++;
+    device->ioRunningCount++;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
@@ -757,10 +861,11 @@ static OSStatus SeirenFX_StopIO(AudioServerPlugInDriverRef inDriver, AudioObject
 {
     (void)inClientID;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
-    if (gIO_RunningCount > 0) gIO_RunningCount--;
+    if (device->ioRunningCount > 0) device->ioRunningCount--;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
@@ -769,16 +874,17 @@ static OSStatus SeirenFX_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver, A
 {
     (void)inClientID;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
     UInt64 currentHostTime = mach_absolute_time();
-    Float64 hostTicksPerRing = gHostTicksPerFrame * (Float64)kRingFrames;
-    Float64 nextOffset = ((Float64)(gNumberTimeStamps + 1)) * hostTicksPerRing;
-    UInt64 nextHostTime = gAnchorHostTime + (UInt64)nextOffset;
-    if (currentHostTime >= nextHostTime) gNumberTimeStamps++;
-    *outSampleTime = (Float64)(gNumberTimeStamps * (UInt64)kRingFrames);
-    *outHostTime   = gAnchorHostTime + (UInt64)(((Float64)gNumberTimeStamps) * hostTicksPerRing);
+    Float64 hostTicksPerRing = device->hostTicksPerFrame * (Float64)kRingFrames;
+    Float64 nextOffset = ((Float64)(device->numberTimeStamps + 1)) * hostTicksPerRing;
+    UInt64 nextHostTime = device->anchorHostTime + (UInt64)nextOffset;
+    if (currentHostTime >= nextHostTime) device->numberTimeStamps++;
+    *outSampleTime = (Float64)(device->numberTimeStamps * (UInt64)kRingFrames);
+    *outHostTime   = device->anchorHostTime + (UInt64)(((Float64)device->numberTimeStamps) * hostTicksPerRing);
     *outSeed       = 1;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
@@ -788,7 +894,8 @@ static OSStatus SeirenFX_WillDoIOOperation(AudioServerPlugInDriverRef inDriver, 
 {
     (void)inClientID;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     Boolean willDo = false, inPlace = true;
     switch (inOperationID) {
@@ -803,16 +910,21 @@ static OSStatus SeirenFX_WillDoIOOperation(AudioServerPlugInDriverRef inDriver, 
 
 static OSStatus SeirenFX_BeginIOOperation(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize, const AudioServerPlugInIOCycleInfo* inIOCycleInfo)
 {
-    (void)inDriver; (void)inDeviceObjectID; (void)inClientID; (void)inOperationID; (void)inIOBufferFrameSize; (void)inIOCycleInfo;
+    (void)inClientID; (void)inOperationID; (void)inIOBufferFrameSize; (void)inIOCycleInfo;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return noErr;
 }
 
 static OSStatus SeirenFX_DoIOOperation(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, AudioObjectID inStreamObjectID, UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize, const AudioServerPlugInIOCycleInfo* inIOCycleInfo, void* ioMainBuffer, void* ioSecondaryBuffer)
 {
-    (void)inStreamObjectID; (void)inClientID; (void)ioSecondaryBuffer;
+    (void)inClientID; (void)ioSecondaryBuffer;
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
-    if (inDeviceObjectID != kObjectID_Device) return kAudioHardwareBadObjectError;
-    if (gRing == NULL || ioMainBuffer == NULL) return noErr;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
+    if (inStreamObjectID != device->inputStreamID && inStreamObjectID != device->outputStreamID) return kAudioHardwareBadObjectError;
+    if (device->ring == NULL || ioMainBuffer == NULL) return noErr;
 
     Float32* buffer = (Float32*)ioMainBuffer;
 
@@ -821,7 +933,7 @@ static OSStatus SeirenFX_DoIOOperation(AudioServerPlugInDriverRef inDriver, Audi
         Float64 startTime = inIOCycleInfo->mOutputTime.mSampleTime;
         for (UInt32 f = 0; f < inIOBufferFrameSize; f++) {
             UInt64 idx = ((UInt64)(startTime + (Float64)f)) % (UInt64)kRingFrames;
-            Float32* dst = &gRing[idx * kChannelsPerFrame];
+            Float32* dst = &device->ring[idx * kChannelsPerFrame];
             const Float32* src = &buffer[(size_t)f * kChannelsPerFrame];
             for (UInt32 c = 0; c < kChannelsPerFrame; c++) dst[c] = src[c];
         }
@@ -830,7 +942,7 @@ static OSStatus SeirenFX_DoIOOperation(AudioServerPlugInDriverRef inDriver, Audi
         Float64 startTime = inIOCycleInfo->mInputTime.mSampleTime;
         for (UInt32 f = 0; f < inIOBufferFrameSize; f++) {
             UInt64 idx = ((UInt64)(startTime + (Float64)f)) % (UInt64)kRingFrames;
-            const Float32* src = &gRing[idx * kChannelsPerFrame];
+            const Float32* src = &device->ring[idx * kChannelsPerFrame];
             Float32* dst = &buffer[(size_t)f * kChannelsPerFrame];
             for (UInt32 c = 0; c < kChannelsPerFrame; c++) dst[c] = src[c];
         }
@@ -840,6 +952,9 @@ static OSStatus SeirenFX_DoIOOperation(AudioServerPlugInDriverRef inDriver, Audi
 
 static OSStatus SeirenFX_EndIOOperation(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize, const AudioServerPlugInIOCycleInfo* inIOCycleInfo)
 {
-    (void)inDriver; (void)inDeviceObjectID; (void)inClientID; (void)inOperationID; (void)inIOBufferFrameSize; (void)inIOCycleInfo;
+    (void)inClientID; (void)inOperationID; (void)inIOBufferFrameSize; (void)inIOCycleInfo;
+    if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
+    if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
     return noErr;
 }

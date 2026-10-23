@@ -63,6 +63,52 @@ package enum AudioDevices {
             ?? devices.first { deviceName($0) == "Seiren FX" }
     }
 
+    package static func streamMixDevice() -> AudioObjectID? {
+        allDevices().first { deviceUID($0) == MonitorEngine.streamMixDeviceUID }
+    }
+
+    package static func processObjects() -> [AudioObjectID] {
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+        var addr = processListAddress
+        var size: UInt32 = 0
+        guard AudioObjectHasProperty(sys, &addr),
+              AudioObjectGetPropertyDataSize(sys, &addr, 0, nil, &size) == noErr,
+              size > 0 else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(sys, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    package static func processPID(_ object: AudioObjectID) -> pid_t? {
+        readInt32(object, kAudioProcessPropertyPID)
+    }
+
+    package static func processBundleID(_ object: AudioObjectID) -> String? {
+        readString(object, kAudioProcessPropertyBundleID)
+    }
+
+    package static func executablePath(_ pid: pid_t) -> String? {
+        // libproc.h defines PROC_PIDPATHINFO_MAXSIZE as 4 * MAXPATHLEN.
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
+        return String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    package static func ownProcessObject() -> AudioObjectID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var pid = getpid()
+        var object: AudioObjectID = 0
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                        UInt32(MemoryLayout<pid_t>.size), &pid,
+                                        &size, &object) == noErr,
+              object != kAudioObjectUnknown else { return nil }
+        return object
+    }
+
     package static func allDevices() -> [AudioObjectID] {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -110,6 +156,32 @@ package enum AudioDevices {
         guard AudioObjectGetPropertyDataSize(dev, &addr, 0, nil, &size) == noErr
         else { return 0 }
         return Int(size) / MemoryLayout<AudioObjectID>.size
+    }
+
+    /// Declare every stream in one direction before starting an IOProc. The
+    /// HAL preserves buffer indices and supplies NULL mData for disabled
+    /// streams. This variable-length C structure has one trailing UInt32 per
+    /// stream; its IOProc field takes the ID returned by CreateIOProcID.
+    package static func setIOProcStreamUsage(_ dev: AudioObjectID, proc: AudioDeviceIOProcID,
+        scope: AudioObjectPropertyScope, enabled: [Bool]) -> OSStatus {
+        guard !enabled.isEmpty else { return kAudioHardwareBadPropertySizeError }
+        let size = MemoryLayout<AudioHardwareIOProcStreamUsage>.size
+            + (enabled.count - 1) * MemoryLayout<UInt32>.size
+        let storage = UnsafeMutableRawPointer.allocate(byteCount: size,
+            alignment: MemoryLayout<AudioHardwareIOProcStreamUsage>.alignment)
+        defer { storage.deallocate() }
+        let usage = storage.bindMemory(to: AudioHardwareIOProcStreamUsage.self, capacity: 1)
+        usage.initialize(to: AudioHardwareIOProcStreamUsage(
+            mIOProc: unsafeBitCast(proc, to: UnsafeMutableRawPointer.self),
+            mNumberStreams: UInt32(enabled.count), mStreamIsOn: 0))
+        let offset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
+        for (index, on) in enabled.enumerated() {
+            storage.storeBytes(of: on ? UInt32(1) : UInt32(0),
+                toByteOffset: offset + index * MemoryLayout<UInt32>.size, as: UInt32.self)
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyIOProcStreamUsage,
+            mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(dev, &address, 0, nil, UInt32(size), storage)
     }
 
     /// Best-effort: shrink the device's I/O buffer toward `frames` (clamped to
@@ -216,13 +288,7 @@ package enum AudioDevices {
         var listAddr = processListAddress
         guard AudioObjectHasProperty(sys, &listAddr) else { return nil } // pre-14 fallback
 
-        var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(sys, &listAddr, 0, nil, &size) == noErr,
-              size > 0 else { return [] }
-        let count = Int(size) / MemoryLayout<AudioObjectID>.size
-        var procs = [AudioObjectID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(sys, &listAddr, 0, nil, &size, &procs) == noErr
-        else { return [] }
+        let procs = processObjects()
 
         let excluded = selfAndAncestorPIDs
         var found: [RecordingProcess] = []

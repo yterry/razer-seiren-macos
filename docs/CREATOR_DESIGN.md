@@ -23,7 +23,7 @@ The app has **two independent control planes**, both already present in embryo:
 1. **Audio plane** — per-buffer DSP run *inside the existing single full-duplex `monitorIOProc`*. This is where **EQ** and **Noise Suppression** live. It is monitor-only by construction (other apps still record the raw mic).
 2. **HID plane** — the existing `SeirenController` / `DeviceModel` / `DeviceRegistry` transport (interface 3, usage page `0xFF53`, Feature report `0x07`, 63 data bytes). This is where **Lighting** lives. It is **hard-gated on a Windows Synapse byte capture that does not yet exist**, and may turn out to be a no-op forever if the V3 Pro has no addressable RGB.
 
-The **Streamer Mixer** is **roadmap-only**. It fundamentally requires a virtual audio device (a signed/notarized CoreAudio HAL plug-in), which breaks unsigned + no-build-step and needs a Developer ID. It is the deliberate "v2 tier" milestone, not part of the menu-bar app.
+The **Stream Mixer** was planned as roadmap-only because it needs a virtual audio device. Seiren FX and Developer-ID-signed releases later removed that blocker, and it shipped; see §7.1 for the as-built design.
 
 Build order: **EQ (v0.2) → Noise Suppression (v0.3) → Lighting scaffold (v0.4, indefinitely gated) → stabilize (v1.0) → virtual-device + mixer (v2, Developer-ID tier).**
 
@@ -390,13 +390,37 @@ Each phase is independently shippable and never breaks the trust model.
 
 **Build-order rationale:** EQ first (native, lowest risk, builds the pipeline) → NS second (reuses the pipeline) → Lighting third (isolated HID plane, external-capture-gated) → mixer never until signing exists.
 
-### 7.1 Streamer Mixer — ROADMAP-ONLY (do not design for build)
+### 7.1 Stream Mixer — as built
 
-**What it is:** a macOS analog of Synapse's Stream Mixer — virtual **input** channels (Game / Chat / Browser / System / Music / Mic / Aux) with per-channel faders + mute, summed into two virtual **output** devices: a **Stream Mix** (one clean source OBS captures) and a **Playback Mix** (what the creator monitors).
+The original plan deferred the mixer until the project had a signed virtual audio device.
+Seiren FX shipped and releases are Developer-ID signed, so that blocker is gone.
+This section records what was built and the facts it rests on; the code is `Sources/SeirenKit/MixerEngine.swift` and the `seiren_mixer_*` functions in SeirenDSP.
 
-**Why deferred:** it is fundamentally a multi-input → multi-virtual-output routing engine and **requires** one or more virtual audio devices (CoreAudio HAL plug-in / AudioServerPlugIn / DriverKit). That breaks every invariant: cannot be unsigned (modern `coreaudiod` may refuse unsigned/ad-hoc HAL plug-ins; DriverKit needs an Apple-granted entitlement), cannot be no-build-step (separate `.driver` bundle, `sudo` install to `/Library/Audio/Plug-Ins/HAL`, `coreaudiod` restart, system-extension approval), and bursts the menu-bar scope (multi-channel engine + per-app routing UI). It is the natural "we got a Developer ID" milestone.
+**Shape.**
+The driver publishes a second loopback device, **Seiren Stream Mix** (UID `SeirenFX:StreamMix`, driver 2.0.0), next to Seiren FX, which stays voice-only for Zoom / Discord.
+Channels are Voice, Desktop audio, and up to 6 per-app channels, each with a level (gain = position², never above unity) and a mute.
+The mixer feeds the stream only.
+There is no Playback Mix: apps keep playing to the user's own output, because re-rendering all of their audio through this app would make it a single point of failure for everything they hear.
 
-**Honest interim:** a README page pointing creators at **BlackHole + an Aggregate Device** — acknowledge the gap rather than ship half a driver.
+**Engine.**
+`MixerEngine` owns one private aggregate: Seiren FX as the clock (the voice route sets its rate, the mixer never does), Seiren Stream Mix as a drift-compensated sub-device, and one Core Audio process tap per source (macOS 14.2+).
+Voice is read back from Seiren FX's loopback input, so whatever feeds Seiren FX (the Seiren or the input fallback) is the voice.
+Desktop audio is a global tap that excludes this process, every process owned by an app channel, and every process recording Seiren Stream Mix (so a recorder that plays the mix back out cannot loop).
+An app channel is a mixdown tap of the processes whose outermost `.app` bundle is that app; WebKit's GPU / WebContent services count as Safari.
+The mixer runs only while another process records Seiren Stream Mix.
+
+**Facts verified on hardware (macOS 27) before building it.**
+
+- An aggregate resamples taps to its own rate: a 1 kHz tone measured correctly with the output device at 44.1 kHz and the aggregate at 48 or 96 kHz.
+- IOProc input buffers come in sub-device order, then taps in tap-list order.
+- A global tap captures this process's own writes to Seiren FX, so self-exclusion is mandatory.
+- A mixdown tap with an empty process list is valid and silent.
+- Setting `kAudioTapPropertyDescription` on an existing tap fails with `'!hog'` in every state, so a changed process set means rebuilding the taps and the aggregate.
+  `CATapDescription.bundleIDs` would avoid that but needs macOS 26.
+- A denied system-audio permission produces silent taps, not an error.
+
+**RT path.**
+Mixing is C (`seiren_mixer_process`): per-channel gains published with C11 atomics and ramped across each buffer, a stereo-linked peak limiter on the bus (-1 dBFS ceiling, instant attack, 120 ms release), silence on Seiren FX's output, and Stream Mix's own input never mixed.
 
 ---
 

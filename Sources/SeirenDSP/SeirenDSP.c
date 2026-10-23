@@ -371,3 +371,157 @@ void seiren_dsp_gate(float *x, int frames, int channels)
         }
     }
 }
+
+// --- Stream mixer ------------------------------------------------------------
+
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2 && ATOMIC_LLONG_LOCK_FREE == 2 &&
+               __atomic_always_lock_free(sizeof(float), 0),
+               "Mixer atomics must be lock-free on the audio thread");
+
+struct SeirenMixer {
+    int inputChannels[SEIREN_MIXER_MAX_INPUTS];
+    int mixOutput;
+    _Atomic(float) targets[SEIREN_MIXER_MAX_CHANNELS];
+    float previous[SEIREN_MIXER_MAX_CHANNELS];
+    float limiterGain, release;
+    _Atomic(uint64_t) callbacks;
+    _Atomic(uint32_t) inputBuffers, outputBuffers;
+    _Atomic(float) inputPeaks[SEIREN_MIXER_MAX_INPUTS];
+    _Atomic(float) channelPeaks[SEIREN_MIXER_MAX_CHANNELS];
+    _Atomic(float) outputPeak;
+};
+
+SeirenMixer *seiren_mixer_create(double sampleRate, int mixOutput) {
+    SeirenMixer *m = calloc(1, sizeof(*m));
+    if (!m) return NULL;
+    for (int i = 0; i < SEIREN_MIXER_MAX_INPUTS; ++i) {
+        m->inputChannels[i] = -1;
+        atomic_init(&m->inputPeaks[i], 0);
+    }
+    for (int i = 0; i < SEIREN_MIXER_MAX_CHANNELS; ++i) {
+        atomic_init(&m->targets[i], 0);
+        atomic_init(&m->channelPeaks[i], 0);
+    }
+    atomic_init(&m->callbacks, 0);
+    atomic_init(&m->inputBuffers, 0);
+    atomic_init(&m->outputBuffers, 0);
+    atomic_init(&m->outputPeak, 0);
+    m->mixOutput = mixOutput;
+    m->limiterGain = 1;
+    m->release = expf(-1.0f / (0.120f * (float)(sampleRate > 0 ? sampleRate : 48000)));
+    return m;
+}
+
+void seiren_mixer_destroy(SeirenMixer *m) { free(m); }
+
+void seiren_mixer_map_input(SeirenMixer *m, int input, int channel) {
+    if (m && input >= 0 && input < SEIREN_MIXER_MAX_INPUTS &&
+        channel >= 0 && channel < SEIREN_MIXER_MAX_CHANNELS)
+        m->inputChannels[input] = channel;
+}
+
+void seiren_mixer_set_gain(SeirenMixer *m, int channel, float gain) {
+    if (!m || channel < 0 || channel >= SEIREN_MIXER_MAX_CHANNELS) return;
+    if (!isfinite(gain)) gain = 0;
+    atomic_store_explicit(&m->targets[channel], fminf(1, fmaxf(0, gain)), memory_order_relaxed);
+}
+
+static void mixer_peak(_Atomic(float) *stored, float value) {
+    // Only the RT proc writes diagnostics, so no compare-exchange loop needed.
+    if (value > atomic_load_explicit(stored, memory_order_relaxed))
+        atomic_store_explicit(stored, value, memory_order_relaxed);
+}
+
+void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBufferList *output) {
+    if (!m || !input || !output) return;
+    atomic_fetch_add_explicit(&m->callbacks, 1, memory_order_relaxed);
+    atomic_store_explicit(&m->inputBuffers, input->mNumberBuffers, memory_order_relaxed);
+    atomic_store_explicit(&m->outputBuffers, output->mNumberBuffers, memory_order_relaxed);
+    for (UInt32 b = 0; b < output->mNumberBuffers; ++b)
+        if (output->mBuffers[b].mData)
+            memset(output->mBuffers[b].mData, 0, output->mBuffers[b].mDataByteSize);
+
+    // Meter all observed inputs, even the explicitly ignored loopback buffer.
+    UInt32 inputs = input->mNumberBuffers < SEIREN_MIXER_MAX_INPUTS
+        ? input->mNumberBuffers : SEIREN_MIXER_MAX_INPUTS;
+    for (UInt32 b = 0; b < inputs; ++b) {
+        const AudioBuffer *in = &input->mBuffers[b];
+        if (!in->mData) continue;
+        const float *samples = in->mData;
+        float peak = 0;
+        for (UInt32 i = 0; i < in->mDataByteSize / sizeof(float); ++i)
+            if (isfinite(samples[i])) peak = fmaxf(peak, fabsf(samples[i]));
+        mixer_peak(&m->inputPeaks[b], peak);
+        int channel = m->inputChannels[b];
+        if (channel >= 0) mixer_peak(&m->channelPeaks[channel], peak);
+    }
+    if (m->mixOutput < 0 || (UInt32)m->mixOutput >= output->mNumberBuffers) return;
+    AudioBuffer *out = &output->mBuffers[m->mixOutput];
+    if (!out->mData || out->mNumberChannels == 0) return;
+    UInt32 frames = out->mDataByteSize / (sizeof(float) * out->mNumberChannels);
+    if (!frames) return;
+    float targets[SEIREN_MIXER_MAX_CHANNELS];
+    for (int c = 0; c < SEIREN_MIXER_MAX_CHANNELS; ++c)
+        targets[c] = atomic_load_explicit(&m->targets[c], memory_order_relaxed);
+    float *dest = out->mData;
+    const float ceiling = 0.891250938f; // -1 dBFS
+    float outputPeak = 0;
+    for (UInt32 f = 0; f < frames; ++f) {
+        float left = 0, right = 0;
+        float progress = (float)(f + 1) / (float)frames;
+        for (UInt32 b = 0; b < inputs; ++b) {
+            int c = m->inputChannels[b];
+            const AudioBuffer *in = &input->mBuffers[b];
+            if (c < 0 || !in->mData || !in->mNumberChannels) continue;
+            UInt32 channels = in->mNumberChannels;
+            if (f >= in->mDataByteSize / (sizeof(float) * channels)) continue;
+            const float *src = in->mData;
+            float gain = m->previous[c] + (targets[c] - m->previous[c]) * progress;
+            float l = src[f * channels], r = src[f * channels + (channels > 1 ? 1 : 0)];
+            left += (isfinite(l) ? l : 0) * gain;
+            right += (isfinite(r) ? r : 0) * gain;
+        }
+        float peak = fmaxf(fabsf(left), fabsf(right));
+        float required = peak > ceiling ? ceiling / peak : 1;
+        m->limiterGain = fminf(required, 1 - (1 - m->limiterGain) * m->release);
+        left *= m->limiterGain; right *= m->limiterGain;
+        // Clamp rounding at the ceiling without changing the linked gain.
+        left = fmaxf(-ceiling, fminf(ceiling, left));
+        right = fmaxf(-ceiling, fminf(ceiling, right));
+        dest[f * out->mNumberChannels] = left;
+        if (out->mNumberChannels > 1) dest[f * out->mNumberChannels + 1] = right;
+        outputPeak = fmaxf(outputPeak, fmaxf(fabsf(left), fabsf(right)));
+    }
+    for (int c = 0; c < SEIREN_MIXER_MAX_CHANNELS; ++c) m->previous[c] = targets[c];
+    mixer_peak(&m->outputPeak, outputPeak);
+}
+
+OSStatus seiren_mixer_io_proc(AudioObjectID device, const AudioTimeStamp *now,
+    const AudioBufferList *input, const AudioTimeStamp *inputTime,
+    AudioBufferList *output, const AudioTimeStamp *outputTime, void *clientData) {
+    seiren_mixer_process(clientData, input, output);
+    return noErr;
+}
+
+AudioDeviceIOProc seiren_mixer_proc(void) { return seiren_mixer_io_proc; }
+
+uint64_t seiren_mixer_callbacks(const SeirenMixer *m) {
+    return m ? atomic_load_explicit(&m->callbacks, memory_order_relaxed) : 0;
+}
+uint32_t seiren_mixer_input_buffers(const SeirenMixer *m) {
+    return m ? atomic_load_explicit(&m->inputBuffers, memory_order_relaxed) : 0;
+}
+uint32_t seiren_mixer_output_buffers(const SeirenMixer *m) {
+    return m ? atomic_load_explicit(&m->outputBuffers, memory_order_relaxed) : 0;
+}
+float seiren_mixer_input_peak(const SeirenMixer *m, int input) {
+    return m && input >= 0 && input < SEIREN_MIXER_MAX_INPUTS
+        ? atomic_load_explicit(&m->inputPeaks[input], memory_order_relaxed) : 0;
+}
+float seiren_mixer_channel_peak(const SeirenMixer *m, int channel) {
+    return m && channel >= 0 && channel < SEIREN_MIXER_MAX_CHANNELS
+        ? atomic_load_explicit(&m->channelPeaks[channel], memory_order_relaxed) : 0;
+}
+float seiren_mixer_output_peak(const SeirenMixer *m) {
+    return m ? atomic_load_explicit(&m->outputPeak, memory_order_relaxed) : 0;
+}

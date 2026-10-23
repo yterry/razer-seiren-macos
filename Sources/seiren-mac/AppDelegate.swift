@@ -11,7 +11,7 @@ import SeirenKit
 /// the engine's `weak` delegate back to us, is correct and cycle-free.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
-                         LightingControllerDelegate {
+                         LightingControllerDelegate, MixerEngineDelegate, NSMenuDelegate {
 
     // MARK: - State
 
@@ -21,9 +21,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     /// to exercise the menu without the hardware. Not a user setting.
     private let engine = MonitorEngine(
         deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren")
+    private let mixer = MixerEngine()
     private let lighting = LightingController()
     private let settings = Settings()
     private var levelSlider: NSSlider?
+    private var mixerMenu: NSMenu?
+    private var mixerRows: [MixerChannelView] = []
+    private var displayedMixerState: MixerMenuState?
+
+    private struct MixerMenuState: Equatable {
+        var enabled: Bool
+        var availability: MixerEngine.State
+        var state: MixerEngine.State
+        var sources: [MixerEngine.Source]
+        var voiceOff: Bool
+    }
+
+    private var mixerMenuState: MixerMenuState {
+        MixerMenuState(enabled: mixer.isEnabled, availability: mixer.availability,
+                       state: mixer.state, sources: mixer.channels.map(\.source), voiceOff: engine.mode == .off)
+    }
 
     /// Static color choices for the Lighting menu (name, hex).
     ///
@@ -45,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         configureStatusButtonImage()
 
         engine.delegate = self
+        mixer.setChannels(settings.mixerChannels)
+        mixer.delegate = self
+        mixer.setEnabled(settings.mixerEnabled)
+        engine.includeStreamMixInTriggers = mixer.isEnabled
 
         // Restore persisted level + EQ + noise suppression before auto-resume.
         if let lvl = settings.level { engine.level = lvl }
@@ -80,6 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        mixer.shutdown()
+        engine.shutdown()
+    }
+
     private func restoredMode() -> MonitorEngine.Mode {
         // Settings.migrate() already upgraded the pre-mode Bool to a mode string.
         settings.mode
@@ -96,6 +122,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             self.rebuildMenu()
             self.configureStatusButtonImage()
         }
+    }
+
+    nonisolated func mixerEngineDidChange(_ mixer: MixerEngine) {
+        Task { @MainActor in
+            self.engine.includeStreamMixInTriggers = mixer.isEnabled
+            if self.displayedMixerState == self.mixerMenuState {
+                for row in self.mixerRows {
+                    if let channel = mixer.channels.first(where: { $0.source == row.channel.source }) {
+                        row.update(channel)
+                    }
+                }
+            } else if let menu = self.mixerMenu {
+                self.populateMixerMenu(menu)
+            }
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === mixerMenu { populateMixerMenu(menu) }
     }
 
     // MARK: - LightingControllerDelegate
@@ -163,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // 5. Voice — parametric EQ (creator path; needs SeirenFX).
         menu.addItem(inputMenuItem())
         menu.addItem(voiceMenuItem())
+        menu.addItem(streamMixerMenuItem())
 
         menu.addItem(.separator())
 
@@ -269,15 +315,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // and ignores our `isEnabled`.
         submenu.autoenablesItems = false
 
-        if !engine.fxAvailable {
-            if DriverInstaller.isBundled {
+        let fxAvailable = engine.fxAvailable
+        let updateAvailable = DriverInstaller.updateAvailable
+        if updateAvailable {
+            let update = NSMenuItem(title: "Update Seiren FX…",
+                                    action: #selector(installDriver), keyEquivalent: "")
+            update.target = self
+            submenu.addItem(update)
+            submenu.addItem(disabledItem("A newer Seiren FX comes with this app"))
+            if fxAvailable { submenu.addItem(.separator()) }
+        }
+
+        if !fxAvailable {
+            if DriverInstaller.isBundled && !updateAvailable {
                 let install = NSMenuItem(title: "Install Seiren FX…",
                                          action: #selector(installDriver), keyEquivalent: "")
                 install.target = self
                 install.isEnabled = true
                 submenu.addItem(install)
                 submenu.addItem(disabledItem("Enables EQ in OBS / Zoom / Discord"))
-            } else {
+            } else if !DriverInstaller.isBundled {
                 submenu.addItem(disabledItem("Build the Seiren FX driver to use EQ"))
                 submenu.addItem(disabledItem("(see the README — scripts/build-driver.sh)"))
             }
@@ -324,6 +381,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         item.submenu = submenu
         return item
+    }
+
+    private func streamMixerMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Stream Mixer", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        submenu.delegate = self
+        mixerMenu = submenu
+        populateMixerMenu(submenu)
+        item.submenu = submenu
+        return item
+    }
+
+    private func populateMixerMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        mixerRows = []
+        displayedMixerState = mixerMenuState
+        switch mixer.availability {
+        case .needsFX, .needsDriverUpdate:
+            let updating = mixer.availability == .needsDriverUpdate
+            if DriverInstaller.isBundled {
+                let install = NSMenuItem(title: updating ? "Update Seiren FX…" : "Install Seiren FX…",
+                                         action: #selector(installDriver), keyEquivalent: "")
+                install.target = self
+                menu.addItem(install)
+                menu.addItem(disabledItem(updating ? "Adds the Seiren Stream Mix device" : "Adds Seiren FX and Seiren Stream Mix"))
+            } else {
+                menu.addItem(disabledItem("Rebuild the driver: scripts/build-driver.sh"))
+                menu.addItem(disabledItem("then: sudo scripts/install-driver.sh"))
+            }
+            return
+        case .unsupportedOS:
+            menu.addItem(disabledItem("Needs macOS 14.2 or later"))
+            return
+        default: break
+        }
+        let toggle = NSMenuItem(title: "Mix into Seiren Stream Mix",
+                                action: #selector(toggleMixer), keyEquivalent: "")
+        toggle.target = self
+        toggle.state = mixer.isEnabled ? .on : .off
+        menu.addItem(toggle)
+        menu.addItem(disabledItem("In OBS, pick “Seiren Stream Mix” as the mic"))
+        guard mixer.isEnabled else { return }
+        menu.addItem(.separator())
+        for channel in mixer.channels {
+            let item = NSMenuItem()
+            let row = MixerChannelView(channel: channel, icon: mixerIcon(for: channel.source)) { [weak self] updated in
+                guard let self else { return }
+                self.mixer.setLevel(updated.level, for: updated.source)
+                self.mixer.setMuted(updated.muted, for: updated.source)
+                self.settings.mixerChannels = self.mixer.channels
+            }
+            if channel.source == .desktop { row.toolTip = "Every app without its own channel" }
+            item.view = row
+            mixerRows.append(row)
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let appChannels = mixer.channels.filter { if case .app = $0.source { return true }; return false }
+        let add = NSMenuItem(title: "Add App", action: nil, keyEquivalent: "")
+        let apps = NSMenu()
+        apps.autoenablesItems = false
+        if appChannels.count >= MixerEngine.maxAppChannels {
+            apps.addItem(disabledItem("Up to 6 apps"))
+        } else {
+            let candidates = NSWorkspace.shared.runningApplications.filter { app in
+                guard app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+                      let id = app.bundleIdentifier, !MixerEngine.isWebAppShim(bundleID: id) else { return false }
+                return id != Bundle.main.bundleIdentifier && !appChannels.contains { $0.source == .app(bundleID: id) }
+            }.sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
+            var seen: Set<String> = []
+            for app in candidates {
+                guard let id = app.bundleIdentifier, seen.insert(id).inserted else { continue }
+                let choice = NSMenuItem(title: app.localizedName ?? id,
+                                        action: #selector(addMixerApp(_:)), keyEquivalent: "")
+                choice.target = self
+                choice.representedObject = id
+                choice.image = sizedMixerIcon(app.icon)
+                apps.addItem(choice)
+            }
+        }
+        add.submenu = apps
+        menu.addItem(add)
+        let remove = NSMenuItem(title: "Remove App", action: nil, keyEquivalent: "")
+        let removing = NSMenu()
+        removing.autoenablesItems = false
+        for channel in appChannels {
+            guard case .app(let id) = channel.source else { continue }
+            let choice = NSMenuItem(title: channel.name, action: #selector(removeMixerApp(_:)), keyEquivalent: "")
+            choice.target = self
+            choice.representedObject = id
+            choice.image = mixerIcon(for: channel.source)
+            removing.addItem(choice)
+        }
+        remove.submenu = removing
+        remove.isHidden = appChannels.isEmpty
+        menu.addItem(remove)
+        menu.addItem(.separator())
+        switch mixer.state {
+        case .running: menu.addItem(disabledItem("Live · mixing into Seiren Stream Mix"))
+        case .failed(let code): menu.addItem(disabledItem("Mixer error (\(code))"))
+        default: menu.addItem(disabledItem("Starts when an app records Seiren Stream Mix"))
+        }
+        if engine.mode == .off { menu.addItem(disabledItem("Voice is silent while monitoring is Off")) }
+    }
+
+    private func sizedMixerIcon(_ image: NSImage?) -> NSImage? {
+        let icon = image?.copy() as? NSImage
+        icon?.size = NSSize(width: 16, height: 16)
+        return icon
+    }
+
+    private func mixerIcon(for source: MixerEngine.Source) -> NSImage? {
+        switch source {
+        case .voice: return NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
+        case .desktop: return NSImage(systemSymbolName: "desktopcomputer", accessibilityDescription: nil)
+        case .app(let id):
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.icon
+            let installed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map {
+                NSWorkspace.shared.icon(forFile: $0.path)
+            }
+            return sizedMixerIcon(running ?? installed)
+        }
+    }
+
+    @objc private func toggleMixer() {
+        mixer.setEnabled(!mixer.isEnabled)
+        settings.mixerEnabled = mixer.isEnabled
+        engine.includeStreamMixInTriggers = mixer.isEnabled
+    }
+
+    @objc private func addMixerApp(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        mixer.addApp(bundleID: id, name: sender.title)
+        settings.mixerChannels = mixer.channels
+    }
+
+    @objc private func removeMixerApp(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        mixer.removeApp(bundleID: id)
+        settings.mixerChannels = mixer.channels
     }
 
     /// The "Lighting ▸" submenu: effect picker, static colors, brightness.
@@ -415,6 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func lightingBrightnessItem() -> NSMenuItem {
         let item = NSMenuItem()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
+        container.autoresizingMask = [.width]   // the menu sizes it to its own width
 
         let label = NSTextField(labelWithString: "Brightness")
         label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
@@ -426,6 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               minValue: 0, maxValue: 100,
                               target: self, action: #selector(lightingBrightnessChanged(_:)))
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
         // Not continuous: each change talks to the device, so send on release.
         slider.isContinuous = false
         slider.isEnabled = true
@@ -499,6 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func volumeItem(enabled: Bool) -> NSMenuItem {
         let item = NSMenuItem()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
+        container.autoresizingMask = [.width]   // the menu sizes it to its own width
 
         let label = NSTextField(labelWithString: "Volume")
         label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
@@ -510,6 +711,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               minValue: 0, maxValue: 1,
                               target: self, action: #selector(levelChanged(_:)))
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
         slider.isContinuous = true
         slider.isEnabled = enabled
         slider.toolTip = "Headphone monitor volume"
@@ -654,10 +856,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             // coreaudiod just restarted: force a clean re-acquire so the engine
             // drops the now-dead IOProc and picks up the new Seiren FX device.
             let mode = engine.mode
+            let mixing = mixer.isEnabled
             engine.setMode(.off)
+            mixer.setEnabled(false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 guard let self else { return }
                 self.engine.setMode(mode)
+                self.mixer.setEnabled(mixing)
+                self.engine.includeStreamMixInTriggers = self.mixer.isEnabled
                 self.rebuildMenu()
             }
             rebuildMenu()
@@ -716,5 +922,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.runModal()
+    }
+}
+
+/// Menu-hosted controls keep tracking without dismissing the menu. Slider and
+/// mute actions update this row immediately; delegate updates reuse the view.
+@MainActor
+private final class MixerChannelView: NSView {
+    private(set) var channel: MixerEngine.Channel
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "")
+    private let slider: NSSlider
+    private let mute = NSButton()
+    private let changed: (MixerEngine.Channel) -> Void
+
+    init(channel: MixerEngine.Channel, icon: NSImage?, changed: @escaping (MixerEngine.Channel) -> Void) {
+        self.channel = channel
+        self.changed = changed
+        slider = NSSlider(value: Double(channel.level), minValue: 0, maxValue: 1, target: nil, action: nil)
+        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 44))
+        autoresizingMask = [.width]   // the menu sizes the row to its own width
+        let image = NSImageView(frame: NSRect(x: 14, y: 24, width: 16, height: 16))
+        image.image = icon
+        image.imageScaling = .scaleProportionallyDown
+        addSubview(image)
+        nameLabel.frame = NSRect(x: 36, y: 24, width: 108, height: 16)
+        nameLabel.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.autoresizingMask = [.width]
+        addSubview(nameLabel)
+        valueLabel.frame = NSRect(x: 144, y: 24, width: 58, height: 16)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        valueLabel.alignment = .right
+        valueLabel.textColor = .secondaryLabelColor
+        valueLabel.autoresizingMask = [.minXMargin]
+        addSubview(valueLabel)
+        mute.frame = NSRect(x: 204, y: 22, width: 24, height: 20)
+        mute.isBordered = false
+        mute.imagePosition = .imageOnly
+        mute.autoresizingMask = [.minXMargin]
+        mute.target = self
+        mute.action = #selector(toggleMute)
+        addSubview(mute)
+        slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
+        slider.autoresizingMask = [.width]
+        slider.isContinuous = true
+        slider.target = self
+        slider.action = #selector(levelChanged)
+        addSubview(slider)
+        update(channel)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(_ channel: MixerEngine.Channel) {
+        self.channel = channel
+        nameLabel.stringValue = channel.name
+        valueLabel.stringValue = channel.muted ? "Muted" : "\(Int((channel.level * 100).rounded()))%"
+        slider.doubleValue = Double(channel.level)
+        // A muted channel keeps its level for when it comes back; dimming the
+        // slider shows that it isn't reaching the stream right now.
+        slider.alphaValue = channel.muted ? 0.4 : 1
+        slider.setAccessibilityLabel("\(channel.name) level on stream")
+        mute.image = NSImage(systemSymbolName: channel.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                             accessibilityDescription: nil)
+        mute.toolTip = channel.muted ? "Unmute on stream" : "Mute on stream"
+        mute.setAccessibilityLabel("\(channel.name): \(mute.toolTip ?? "")")
+        mute.setAccessibilityValue(channel.muted ? "Muted" : "Unmuted")
+    }
+
+    @objc private func levelChanged() {
+        channel.level = slider.floatValue
+        update(channel)
+        changed(channel)
+    }
+
+    @objc private func toggleMute() {
+        channel.muted.toggle()
+        update(channel)
+        changed(channel)
     }
 }

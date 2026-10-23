@@ -5,7 +5,8 @@
 **The macOS companion app for Razer Seiren microphones.** A tiny menu-bar app that
 gives a Seiren the full experience it has on Windows but never gets on a Mac —
 **hear yourself**, **shape your tone**, **kill background noise**, send the
-*processed* voice to OBS / Zoom / Discord, and **drive the Chroma lighting**.
+*processed* voice to OBS / Zoom / Discord, **mix your stream**, and **drive the
+Chroma lighting**.
 (Razer Synapse supports no microphone at all on the Mac.)
 
 | | |
@@ -14,6 +15,7 @@ gives a Seiren the full experience it has on Windows but never gets on a Mac —
 | 🎚 **Shape your voice** | A parametric **EQ** with Podcast / Studio / Broadcast presets. |
 | 🤫 **Kill the noise** | A zero-latency **gate**, plus opt-in **RNNoise "Studio"** neural denoise. |
 | 📡 **Reach every app** | A bundled virtual device (**Seiren FX**) so other apps record the *processed* voice, not the raw mic. |
+| 🎛 **Mix your stream** | A **Stream Mixer**: your voice plus app audio, each with its own level and mute, in one **Seiren Stream Mix** device for OBS. |
 | 💡 **Light it up** | Native control of the mic's 12-LED **Chroma ring** - effects, static colors, brightness - no Synapse needed. |
 
 Flip a switch in the menu bar — no Synapse, no Windows, no kext. One admin prompt
@@ -241,6 +243,48 @@ When you monitor through Seiren FX, the EQ and the gate are heard in your monito
 **and** by apps recording **Seiren FX**; Studio denoise applies to the Seiren FX
 broadcast only.
 
+### Stream Mixer
+
+The Stream Mixer builds one audio source for your stream: your processed voice
+plus the audio of your other apps, each at its own level, in a second virtual
+device named **Seiren Stream Mix**.
+In OBS (or Discord Go Live, Twitch Studio, a browser studio), pick
+**Seiren Stream Mix** as the mic and you get the whole mix in one source.
+It is the Mac counterpart of Synapse's Stream Mixer.
+
+Open **🎙 → Stream Mixer ▸** and check **Mix into Seiren Stream Mix**:
+
+- **Voice** is the same processed voice apps get from Seiren FX (EQ, noise
+  suppression), so monitoring has to be **On** or **Auto**.
+- **Desktop audio** is every app that has no channel of its own.
+- **Add App ▸** gives an app its own channel (up to 6), so you can turn the music
+  down without touching the game.
+  **Remove App ▸** puts it back into Desktop audio.
+- Each channel has a slider and a mute button.
+  Both work while the menu stays open and apply instantly.
+  A limiter on the mix keeps a loud game plus your voice from clipping.
+
+What you hear yourself does not change: apps keep playing to your speakers or
+headphones as usual, and the faders only shape what the stream gets.
+The mixer runs only while an app is recording Seiren Stream Mix, so macOS's
+audio-recording indicator is on only while you stream.
+
+- Needs **macOS 14.2** or later (it uses Core Audio process taps) and
+  **Seiren FX 2.0**, which adds the Seiren Stream Mix device.
+  If you installed Seiren FX with an older version of the app, the menu offers
+  **Update Seiren FX…** (one admin prompt).
+- The first time the mixer runs, macOS asks to let Seiren record your computer's
+  audio.
+  If you decline, the app channels and Desktop audio stay silent.
+  Turn it on later under **System Settings → Privacy & Security → Screen &
+  System Audio Recording**.
+- Safari plays web audio from shared WebKit processes, so a Safari channel also
+  picks up web audio from other apps built on WebKit (Mail, for example).
+- Keep OBS's audio monitoring off for the Seiren Stream Mix source.
+  The mixer already leaves out any app that records the mix, so it can't loop
+  back, but monitoring the source would play every app a second time, slightly
+  delayed, in your headphones.
+
 ### Lighting
 
 The V3 Pro's ring of 12 RGB LEDs is fully controllable from the app - no Synapse,
@@ -271,6 +315,7 @@ swift run seiren-probe             # read-only dump of the Seiren's audio contro
 swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw
 swift run seiren-probe inputs      # list inputs and which one Automatic would pick
 swift run seiren-probe listen "Seiren FX"   # what other apps hear on Seiren FX, per second
+swift run seiren-probe mix 5 --app com.spotify.client   # run the Stream Mixer, report every channel's level
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
@@ -368,6 +413,9 @@ Full investigation and evidence: [`docs/HARDWARE_SIDETONE.md`](docs/HARDWARE_SID
 - **Creator features need Seiren FX.** The EQ and noise suppression reach your
   monitor and other apps only through the bundled **Seiren FX** device — install it
   once from **Voice ▸**. Plain headphone monitoring works without it.
+- **The Stream Mixer needs macOS 14.2+ and system-audio permission (TCC).**
+  It reads other apps' audio through Core Audio process taps; macOS asks the
+  first time the mixer runs.
 - **Lighting needs Input Monitoring (TCC).** The Chroma ring is driven over the
   mic's HID channel, which macOS gates behind **Input Monitoring**. The app only
   asks when you first use Lighting.
@@ -397,15 +445,18 @@ Sources/
   SeirenKit/         model-independent core (no AppKit, fully testable)
     MonitorEngine.swift   IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
     AudioDevices.swift    Core Audio device + recording-process queries
+    MixerEngine.swift     Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
     EQEngine.swift        RBJ-cookbook coefficient math + voice presets
     ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
-  SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler
+  SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler,
+                     stream mix bus (gain ramps + limiter)
   RNNoise/           vendored xiph/rnnoise (BSD-3) — the "Studio" denoiser
   seiren-mac/        the menu-bar agent (main.swift + AppDelegate): 🎙 menu —
                      modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
-                     Seiren FX install
+                     Stream Mixer ▸, Seiren FX install
   seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
-Driver/SeirenFX/     the loopback virtual audio device (AudioServerPlugIn)
+Driver/SeirenFX/     the loopback virtual audio devices, Seiren FX and Seiren
+                     Stream Mix (AudioServerPlugIn)
 docs/
   HARDWARE_SIDETONE.md  why hardware sidetone isn't reachable on macOS
   PROTOCOL.md           device topology + the (EQ/DSP) HID protocol notes
@@ -481,10 +532,10 @@ swift build
       your voice from your Mac's default mic, so apps set to Seiren FX don't go
       silent; **🎙 → Input ▸** picks any mic explicitly.
 
-**Next:**
-
-- [ ] **Streamer Mixer** — the last roadmap item; now genuinely feasible on the
-      virtual-device foundation (per-source levels into one broadcast bus).
+- [x] **Stream Mixer** - your voice plus app audio, each with its own level
+      and mute, in a second virtual device (**Seiren Stream Mix**) for OBS.
+      Core Audio process taps (macOS 14.2+), mixed in the app; **🎙 → Stream
+      Mixer ▸**; `swift run seiren-probe mix` from the CLI.
 
 See [`docs/CREATOR_DESIGN.md`](docs/CREATOR_DESIGN.md) for the full design.
 

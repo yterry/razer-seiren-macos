@@ -20,6 +20,8 @@
 #ifndef SEIREN_DSP_H
 #define SEIREN_DSP_H
 
+#include <CoreAudio/CoreAudio.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -112,6 +114,47 @@ void seiren_dsp_set_studio(int enabled);
 /// 0 means the buffer is already 48 kHz. Maintains an internal 480-sample
 /// frame bridge (latency ≈ one frame + accumulation), cleared by reset.
 void seiren_dsp_studio_process(float *mono, int frames, int rateIs96k);
+
+// MARK: - Stream mixer
+
+#define SEIREN_MIXER_MAX_CHANNELS 8
+#define SEIREN_MIXER_MAX_INPUTS 32
+
+/// Per-engine C storage: fixed input map, RT gain/limiter history, atomic target
+/// gains and diagnostic counters. Create/free OFF the audio thread, with the
+/// IOProc stopped. The sample rate controls the bus limiter's 120 ms release.
+typedef struct SeirenMixer SeirenMixer;
+SeirenMixer *seiren_mixer_create(double sampleRate, int mixOutput);
+void seiren_mixer_destroy(SeirenMixer *mixer);
+
+/// Map an input AudioBuffer to a channel (0 = voice, 1 = desktop, 2...7 = apps).
+/// Unmapped buffers are ignored, including Stream Mix's loopback input. All
+/// output buffers except mixOutput are silenced, including Seiren FX's output.
+/// Call only while stopped. Input indices must be < SEIREN_MIXER_MAX_INPUTS.
+void seiren_mixer_map_input(SeirenMixer *mixer, int input, int channel);
+
+/// Publish linear gain (clamped to 0...1) with C11 atomics. Safe concurrently
+/// with processing. Each buffer ramps from the preceding gain to this target.
+void seiren_mixer_set_gain(SeirenMixer *mixer, int channel, float gain);
+
+/// Mix Float32 mono/stereo inputs into the selected output. Mono duplicates to
+/// stereo; missing/short input is silence. A stereo-linked limiter has instant
+/// attack and a -1 dBFS ceiling. REAL-TIME SAFE: no allocation, locks, system or
+/// Swift/ObjC runtime calls. One audio-thread writer per mixer.
+void seiren_mixer_process(SeirenMixer *mixer, const AudioBufferList *input,
+                          AudioBufferList *output);
+
+/// Core Audio entry point; clientData is the SeirenMixer allocated above.
+AudioDeviceIOProc seiren_mixer_proc(void);
+
+/// Lock-free cumulative diagnostics since creation. Safe on the main thread;
+/// counters/peaks are individually atomic, not a coherent multi-field snapshot.
+uint64_t seiren_mixer_callbacks(const SeirenMixer *mixer);
+uint32_t seiren_mixer_input_buffers(const SeirenMixer *mixer);
+uint32_t seiren_mixer_output_buffers(const SeirenMixer *mixer);
+float seiren_mixer_input_peak(const SeirenMixer *mixer, int input);
+float seiren_mixer_channel_peak(const SeirenMixer *mixer, int channel);
+float seiren_mixer_output_peak(const SeirenMixer *mixer);
 
 #ifdef __cplusplus
 }

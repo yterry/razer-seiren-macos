@@ -24,6 +24,7 @@ import SeirenKit
 //                                           # jack-less mics like the V3 Mini, via Seiren FX)
 //   swift run seiren-probe route 5 --device "usb audio codec"   # name substring, no fallback
 //   swift run seiren-probe route 5 --input "MacBook"           # pin UID or name, allow fallback
+//   swift run seiren-probe mix [secs] [--app <bundleID>]... # mix and record Stream Mix, report peaks
 //   swift run seiren-probe inputs          # inputs, eligibility, default, Automatic's choice
 //   swift run seiren-probe listen "Seiren FX" [secs]  # record input and report peaks
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
@@ -444,6 +445,74 @@ func runListen(_ args: [String]) {
     print("Overall peak: \(dBFS(listenOverallPeak))")
 }
 
+/// Drive the mixer and record its actual virtual input in the same process.
+/// The recorder bypass exists only for this probe; normal app use stays idle
+/// until another process records Stream Mix. No system output routing changes.
+@MainActor
+func runMix(_ args: [String]) {
+    var seconds = 5.0
+    var durationSeen = false
+    var apps: [String] = []
+    var i = 0
+    while i < args.count {
+        if args[i] == "--app", i + 1 < args.count, !args[i + 1].hasPrefix("--") {
+            apps.append(args[i + 1]); i += 2
+        } else if !durationSeen, let value = Double(args[i]), value.isFinite, value > 0 {
+            seconds = value; durationSeen = true; i += 1
+        } else {
+            print("Usage: seiren-probe mix [seconds] [--app <bundleID>]..."); exit(1)
+        }
+    }
+    let mixer = MixerEngine(runWithoutRecorder: true)
+    defer { mixer.shutdown() }
+    for id in apps { mixer.addApp(bundleID: id, name: id) }
+    listenPeak = 0
+    listenOverallPeak = 0
+    var recorder: AudioDeviceIOProcID?
+    let mixDevice = AudioDevices.streamMixDevice()
+    if let mixDevice {
+        let created = AudioDeviceCreateIOProcID(mixDevice, listenIOProc, nil, &recorder)
+        if created != noErr { print("Stream Mix recorder creation failed: \(created)") }
+        if let recorder {
+            let started = AudioDeviceStart(mixDevice, recorder)
+            if started != noErr { print("Stream Mix recorder start failed: \(started)") }
+        }
+    }
+    defer {
+        if let mixDevice, let recorder {
+            AudioDeviceStop(mixDevice, recorder)
+            AudioDeviceDestroyIOProcID(mixDevice, recorder)
+        }
+    }
+    mixer.setEnabled(true)
+    setbuf(stdout, nil)
+    print("mix: running the app's mixer for \(seconds)s")
+    let end = Date(timeIntervalSinceNow: seconds)
+    while Date() < end {
+        RunLoop.main.run(until: min(Date(timeIntervalSinceNow: 1), end))
+        print("  state: \(mixer.state), recorded mix peak: \(dBFS(listenPeak))")
+        listenPeak = 0
+    }
+    let d = mixer.diagnostics
+    print("  state:          \(mixer.state)")
+    print("  sample rate:    \(Int(d.sampleRate)) Hz")
+    print("  IOProc cycles:  \(d.callbacks)")
+    print("  buffers:        \(d.inputBuffers) in / \(d.outputBuffers) out")
+    for input in d.indexMap.inputChannels.keys.sorted() {
+        let channel = d.indexMap.inputChannels[input]!
+        print("  input[\(input)] -> channel[\(channel)] \(mixer.channels[channel].name)")
+    }
+    print("  ignored inputs: \(d.indexMap.ignoredInputs)")
+    print("  mix output:     \(d.indexMap.mixOutput); silenced outputs: \(d.indexMap.silencedOutputs)")
+    for (input, peak) in d.inputPeaks.enumerated() { print("  input[\(input)] peak: \(dBFS(peak))") }
+    for (index, peak) in d.channelPeaks.enumerated() {
+        print("  \(mixer.channels[index].name) peak: \(dBFS(peak))")
+    }
+    for tap in d.taps { print("  tap: \(tap.channelName), process count: \(tap.processCount)") }
+    print("  mix output peak: \(dBFS(d.mixOutputPeak))")
+    print("  recorded mix peak: \(dBFS(listenOverallPeak))")
+}
+
 // MARK: - device dump
 
 func dumpDeviceLevelControls(_ dev: AudioObjectID) {
@@ -740,6 +809,7 @@ let system = AudioObjectID(kAudioObjectSystemObject)
 
 if CommandLine.arguments.count >= 2 {
     switch CommandLine.arguments[1].lowercased() {
+    case "mix": runMix(Array(CommandLine.arguments.dropFirst(2))); exit(0)
     case "inputs": runInputs(); exit(0)
     case "listen": runListen(Array(CommandLine.arguments.dropFirst(2))); exit(0)
     default: break

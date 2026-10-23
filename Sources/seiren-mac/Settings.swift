@@ -18,6 +18,8 @@ final class Settings {
         static let eqEnabled     = "voice.eq.enabled"   // Bool
         static let eqPreset      = "voice.eq.preset"    // EQPreset.name
         static let nsMode        = "voice.ns.mode"      // NoiseSuppression.rawValue
+        static let mixerEnabled  = "mixer.enabled"
+        static let mixerChannels = "mixer.channels"
         static let legacyEnabled = "monitoringEnabled"  // pre-mode Bool (v0)
         static let lightEffect   = "lighting.effect"    // ChromaEffect.rawValue (Int)
         static let lightColor    = "lighting.color"     // "RRGGBB"
@@ -26,8 +28,8 @@ final class Settings {
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
     /// v3 = lighting keys (absence = "never touched the lights");
-    /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic).
-    static let currentSchema = 5
+    /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic); v6 = mixer (absence = defaults).
+    static let currentSchema = 6
 
     init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -117,6 +119,27 @@ final class Settings {
                 .flatMap(MonitorEngine.NoiseSuppression.init(rawValue:)) ?? .off
         }
         set { defaults.set(newValue.rawValue, forKey: Key.nsMode) }
+    }
+
+    // MARK: Stream Mixer
+
+    var mixerEnabled: Bool {
+        get { defaults.bool(forKey: Key.mixerEnabled) }
+        set { defaults.set(newValue, forKey: Key.mixerEnabled) }
+    }
+
+    var mixerChannels: [MixerEngine.Channel] {
+        get {
+            guard let data = defaults.data(forKey: Key.mixerChannels),
+                  let channels = try? JSONDecoder().decode([MixerEngine.Channel].self, from: data)
+            else { return MixerEngine.defaultChannels }
+            return MixerEngine.normalizedChannels(channels)
+        }
+        set {
+            if let data = try? JSONEncoder().encode(MixerEngine.normalizedChannels(newValue)) {
+                defaults.set(data, forKey: Key.mixerChannels)
+            }
+        }
     }
 
     // MARK: Lighting
