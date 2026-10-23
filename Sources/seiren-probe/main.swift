@@ -22,7 +22,10 @@ import SeirenKit
 //   swift run seiren-probe route [secs]     # run the app's real engine for a few seconds and
 //                                           # report what the RT proc saw (the check for
 //                                           # jack-less mics like the V3 Mini, via Seiren FX)
-//   swift run seiren-probe route 5 --device "usb audio codec"   # any input device, for dev
+//   swift run seiren-probe route 5 --device "usb audio codec"   # name substring, no fallback
+//   swift run seiren-probe route 5 --input "MacBook"           # pin UID or name, allow fallback
+//   swift run seiren-probe inputs          # inputs, eligibility, default, Automatic's choice
+//   swift run seiren-probe listen "Seiren FX" [secs]  # record input and report peaks
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
 //
 // Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
@@ -251,16 +254,34 @@ func dBFS(_ linear: Float) -> String {
 func runRoute(_ args: [String]) {
     var seconds = 5.0
     var match = "seiren"
+    var namedDevice = false
+    var pinnedInput: String?
     var i = 0
     while i < args.count {
-        if args[i] == "--device", i + 1 < args.count { match = args[i + 1]; i += 2; continue }
+        if args[i] == "--device", i + 1 < args.count {
+            match = args[i + 1]; namedDevice = true; i += 2; continue
+        }
+        if args[i] == "--input", i + 1 < args.count {
+            pinnedInput = args[i + 1]; i += 2; continue
+        }
         if let s = Double(args[i]), s > 0 { seconds = s }
         i += 1
     }
 
-    let engine = MonitorEngine(deviceNameMatch: match)
+    guard !namedDevice || pinnedInput == nil else {
+        print("Use either --device or --input."); exit(1)
+    }
+    let engine = MonitorEngine(deviceNameMatch: match, fallbackEnabled: !namedDevice)
+    if let pinnedInput {
+        let candidates = AudioDevices.candidates()
+        let input = candidates.first { $0.uid == pinnedInput }
+            ?? candidates.first { $0.isEligible && $0.name.localizedCaseInsensitiveContains(pinnedInput) }
+        engine.setInputPreference(.device(uid: input?.uid ?? pinnedInput))
+    }
     engine.setMode(.always)
-    print("route: devices matching '\(match)', running the app's engine for \(seconds)s …")
+    let selection = pinnedInput.map { "pinned input '\($0)'" }
+        ?? (namedDevice ? "devices matching '\(match)' (no fallback)" : "Automatic input")
+    print("route: \(selection), running the app's engine for \(seconds)s …")
     // The engine is main-actor; the hotplug listener and Core Audio callbacks
     // need the main run loop turning while we wait.
     RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
@@ -269,18 +290,22 @@ func runRoute(_ args: [String]) {
     let fxLine: String
     if engine.isRoutingThroughFX {
         fxLine = "yes"
+    } else if engine.state == .waiting {
+        fxLine = "no (standby)"
     } else {
-        fxLine = engine.fxAvailable ? "no (aggregate failed - direct monitor)" : "no (driver not installed)"
+        fxLine = engine.fxAvailable ? "no (route inactive)" : "no (driver not installed)"
     }
     print("")
     print("  state:          \(engine.state)")
-    print("  device:         \(engine.connectedDeviceName ?? "(none matched)")")
-    print("  headphone out:  \(engine.deviceHasHeadphoneOutput ? "yes" : "no - input-only mic")")
+    print("  source:         \(engine.activeSource?.name ?? "(none selected)")")
+    print("  source UID:     \(engine.activeSource?.uid ?? "(none)")")
+    print("  is Seiren:      \(engine.activeSource.map { $0.isSeiren ? "yes" : "no" } ?? "n/a")")
+    print("  headphone out:  \(engine.deviceHasHeadphoneOutput ? "yes" : "no - source is not monitored")")
     print("  via Seiren FX:  \(fxLine)")
     print("  sample rate:    \(Int(d.sampleRate)) Hz")
     print("  IOProc cycles:  \(d.callbacks)")
     print("  buffers:        \(d.inputBuffers) in / \(d.outputBuffers) out " +
-          "(\(d.monitorBuffers) headphone, \(max(0, d.outputBuffers - d.monitorBuffers)) Seiren FX)")
+          "(\(d.monitorBuffers) source outputs, \(max(0, d.outputBuffers - d.monitorBuffers)) Seiren FX)")
     print("  mic peak:       \(dBFS(d.inputPeak))")
     print("")
 
@@ -304,10 +329,119 @@ func runRoute(_ args: [String]) {
         print("No input device whose name contains '\(match)'. Plug the mic in, then re-run.")
     case .failed(let code):
         print("Core Audio error \(code) starting the route. Paste this output in an issue.")
-    case .stopped, .waiting:
+    case .waiting:
+        print("Standby: starts when another app records from Seiren FX.")
+    case .stopped:
         print("Unexpected state \(engine.state).")
     }
     engine.shutdown()
+}
+
+// MARK: - inputs and reference recording
+
+@MainActor
+func runInputs() {
+    let candidates = AudioDevices.candidates()
+    guard !candidates.isEmpty else {
+        print("No audio devices found (Core Audio may be unavailable in this sandbox).")
+        exit(1)
+    }
+    let defaultID = AudioDevices.defaultInputDevice()
+    let defaultUID = defaultID.flatMap { AudioDevices.deviceUID($0) }
+    for device in candidates where device.hasInput {
+        let transport = AudioDevices.transportType(device.id).map(fourCC) ?? "unknown"
+        let ins = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeInput)
+        let outs = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeOutput)
+        let reason: String
+        if [MonitorEngine.fxDeviceUID, MonitorEngine.streamMixDeviceUID,
+            MonitorEngine.aggregateUID].contains(device.uid) {
+            reason = "ineligible: app-owned device"
+        } else if device.isVirtual {
+            reason = "ineligible: aggregate or virtual transport"
+        } else {
+            reason = "eligible"
+        }
+        print("\(device.name)\(device.id == defaultID ? " (system default input)" : "")")
+        print("  UID: \(device.uid)")
+        print("  transport: \(transport), streams: \(ins) in / \(outs) out")
+        let terminal = device.inputTerminalType.map(fourCC) ?? "unknown"
+        print("  input terminal: \(terminal), microphone: \(device.isMicrophone ? "yes" : "no")")
+        // Only an eligible device can be the Seiren; Seiren FX matches the name.
+        let isSeiren = device.isEligible && device.isSeiren(match: "seiren")
+        print("  \(reason), Seiren: \(isSeiren ? "yes" : "no")")
+    }
+    let defaultName = defaultID.flatMap { AudioDevices.deviceName($0) } ?? "(none)"
+    print("System default input: \(defaultName) [\(defaultUID ?? "no UID")]")
+    let fx = AudioDevices.fxDevice() != nil
+    let source = MonitorEngine.selectSource(from: candidates, preference: .automatic,
+                                            defaultInputUID: defaultUID, match: "seiren", fxInstalled: fx,
+                                            otherInputsSupported: AudioDevices.recordingProcessesSupported)
+    print("Seiren FX installed: \(fx ? "yes" : "no")")
+    print("Automatic: \(source.map { "\($0.device.name) [\($0.device.uid)]" } ?? "(no source)")")
+}
+
+// Single RT writer, diagnostic reads on the main thread, like routeDiagnostics.
+nonisolated(unsafe) var listenPeak: Float = 0
+nonisolated(unsafe) var listenOverallPeak: Float = 0
+nonisolated(unsafe) let listenIOProc: AudioDeviceIOProc = { _, _, input, _, output, _, _ in
+    let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+    var peak: Float = 0
+    for buffer in buffers {
+        guard let data = buffer.mData else { continue }
+        let samples = data.assumingMemoryBound(to: Float.self)
+        let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+        var i = 0
+        while i < count {
+            let value = samples[i]
+            let magnitude = value < 0 ? -value : value
+            if magnitude > peak { peak = magnitude }
+            i += 1
+        }
+    }
+    if peak > listenPeak { listenPeak = peak }
+    if peak > listenOverallPeak { listenOverallPeak = peak }
+    for buffer in UnsafeMutableAudioBufferListPointer(output) {
+        if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+    }
+    return noErr
+}
+
+@MainActor
+func runListen(_ args: [String]) {
+    guard let match = args.first, args.count <= 2,
+          let seconds = args.count == 2 ? Double(args[1]) : 5,
+          seconds.isFinite, seconds > 0 else {
+        print("Usage: seiren-probe listen <name-substring> [seconds]"); exit(1)
+    }
+    guard let device = AudioDevices.candidates().first(where: {
+        $0.hasInput && $0.name.localizedCaseInsensitiveContains(match)
+    }) else {
+        print("No input device whose name contains '\(match)'."); exit(1)
+    }
+    listenPeak = 0
+    listenOverallPeak = 0
+    var proc: AudioDeviceIOProcID?
+    let created = AudioDeviceCreateIOProcID(device.id, listenIOProc, nil, &proc)
+    guard created == noErr, let proc else {
+        print("AudioDeviceCreateIOProcID failed: \(created)"); exit(1)
+    }
+    defer { AudioDeviceDestroyIOProcID(device.id, proc) }
+    let started = AudioDeviceStart(device.id, proc)
+    guard started == noErr else {
+        print("AudioDeviceStart failed: \(started)"); exit(1)
+    }
+    defer { AudioDeviceStop(device.id, proc) }
+    setbuf(stdout, nil)
+    print("Listening to \(device.name) [\(device.uid)] for \(seconds)s")
+    let start = Date()
+    let end = start.addingTimeInterval(seconds)
+    while Date() < end {
+        RunLoop.main.run(until: min(Date(timeIntervalSinceNow: 1), end))
+        let peak = listenPeak
+        listenPeak = 0
+        print(String(format: "  %.1fs: %@", Date().timeIntervalSince(start), dBFS(peak)))
+    }
+    print("Overall peak: \(dBFS(listenOverallPeak))")
 }
 
 // MARK: - device dump
@@ -603,6 +737,14 @@ func runLightingScan() {
 // MARK: - main
 
 let system = AudioObjectID(kAudioObjectSystemObject)
+
+if CommandLine.arguments.count >= 2 {
+    switch CommandLine.arguments[1].lowercased() {
+    case "inputs": runInputs(); exit(0)
+    case "listen": runListen(Array(CommandLine.arguments.dropFirst(2))); exit(0)
+    default: break
+    }
+}
 
 // `procmon` is system-wide (no Seiren required) — handle it before device lookup.
 if CommandLine.arguments.count >= 2, CommandLine.arguments[1].lowercased() == "procmon" {
