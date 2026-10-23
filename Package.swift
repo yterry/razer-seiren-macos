@@ -23,7 +23,17 @@ let package = Package(
             path: "Sources/RNNoise",
             sources: ["src"],
             publicHeadersPath: "include",
-            cSettings: [.headerSearchPath("src")]
+            cSettings: [
+                .headerSearchPath("src"),
+                // The Intel slice of the universal release build uses RNNoise's
+                // SSE2 code on purpose: AVX2 would need per-file flags SwiftPM
+                // can't express, and SSE2 runs on every Intel Mac, including old
+                // ones on a newer macOS through OpenCore Legacy Patcher. Silence
+                // upstream's "only SSE2" notice and a 64-to-32 warning that only
+                // multi-arch (Xcode build system) builds turn on, so release logs
+                // stay clean without editing the vendored sources.
+                .unsafeFlags(["-Wno-#warnings", "-Wno-shorten-64-to-32"]),
+            ]
         ),
 
         // Real-time-safe audio DSP in C (biquad EQ, noise gate, RNNoise glue +
