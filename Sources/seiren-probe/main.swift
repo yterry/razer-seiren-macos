@@ -27,6 +27,12 @@ import SeirenKit
 //   swift run seiren-probe mix [secs] [--app <bundleID>]... # mix and record Stream Mix, report peaks
 //   swift run seiren-probe inputs          # inputs, eligibility, default, Automatic's choice
 //   swift run seiren-probe listen "Seiren FX" [secs]  # record input and report peaks
+//   swift run seiren-probe startup [--device <name-substring>] [--trials N] [--pause S]
+//                                  [--no-fx | --fx-only]
+//                                           # measure cold mic startup and Seiren FX overhead.
+//                                           # Quit the app for --no-fx (it would start its own
+//                                           # route when the probe records the mic); run
+//                                           # --fx-only with the app running in Auto.
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
 //
 // Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
@@ -445,6 +451,338 @@ func runListen(_ args: [String]) {
     print("Overall peak: \(dBFS(listenOverallPeak))")
 }
 
+// MARK: - startup timing
+
+// One RT writer; main only reads or frees these after stopping/destroying the IOProc.
+nonisolated(unsafe) var startupSamples: UnsafeMutablePointer<Float>?
+nonisolated(unsafe) var startupBlockTimes: UnsafeMutablePointer<Double>?
+nonisolated(unsafe) var startupCapacity = 0
+nonisolated(unsafe) var startupSampleCount = 0
+nonisolated(unsafe) var startupBlockFrames = 480
+nonisolated(unsafe) var startupTicksPerFrame = 0.0
+nonisolated(unsafe) var startupFirstIO: UInt64 = 0
+nonisolated(unsafe) var startupFirstSound: UInt64 = 0
+
+nonisolated(unsafe) let startupIOProc: AudioDeviceIOProc = { _, _, input, _, output, _, _ in
+    let now = mach_absolute_time()
+    if startupFirstIO == 0 { startupFirstIO = now }
+    let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+    if !buffers.isEmpty, let data = buffers[0].mData,
+       let samples = startupSamples, let blockTimes = startupBlockTimes {
+        let channels = Int(buffers[0].mNumberChannels)
+        if channels > 0 {
+            let source = data.assumingMemoryBound(to: Float.self)
+            let frames = Int(buffers[0].mDataByteSize) / (MemoryLayout<Float>.size * channels)
+            var frame = 0
+            while frame < frames && startupSampleCount < startupCapacity {
+                let value = source[frame * channels]
+                if startupFirstSound == 0 && value.isFinite && value != 0 { startupFirstSound = now }
+                if startupSampleCount % startupBlockFrames == 0 {
+                    blockTimes[startupSampleCount / startupBlockFrames] =
+                        Double(now) + Double(frame) * startupTicksPerFrame
+                }
+                samples[startupSampleCount] = value.isFinite ? value : 0
+                startupSampleCount += 1
+                frame += 1
+            }
+        }
+    }
+    for buffer in UnsafeMutableAudioBufferListPointer(output) {
+        if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+    }
+    return noErr
+}
+
+nonisolated(unsafe) let startupHeadphoneIOProc: AudioDeviceIOProc = { _, _, _, _, output, _, _ in
+    for buffer in UnsafeMutableAudioBufferListPointer(output) {
+        if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+    }
+    return noErr
+}
+
+struct StartupResult {
+    var start: Double
+    var firstIO: Double
+    var firstSound: Double
+    var settled: Double
+}
+
+func startupMedian(_ values: [Double]) -> Double {
+    guard !values.isEmpty else { return .infinity }
+    let sorted = values.sorted()
+    let middle = sorted.count / 2
+    return sorted.count % 2 == 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
+func startupMilliseconds(_ value: Double) -> String {
+    value.isFinite ? String(format: "%.1f", value) : "never"
+}
+
+func startupMetrics(_ result: StartupResult) -> String {
+    "start=\(startupMilliseconds(result.start))  first IO=\(startupMilliseconds(result.firstIO))  " +
+        "first sound=\(startupMilliseconds(result.firstSound))  settled=\(startupMilliseconds(result.settled))"
+}
+
+@MainActor
+func startupDeviceHeader(_ dev: AudioObjectID) {
+    let buffer = uint32(dev, address(kAudioDevicePropertyBufferFrameSize)).map(String.init) ?? "unknown"
+    print("Device: \(AudioDevices.deviceName(dev) ?? "unknown")")
+    print("  UID: \(AudioDevices.deviceUID(dev) ?? "unknown")")
+    print("  Nominal rate: \(AudioDevices.nominalRate(dev)) Hz; streams: " +
+          "\(streamCount(dev, kAudioObjectPropertyScopeInput)) input / " +
+          "\(streamCount(dev, kAudioObjectPropertyScopeOutput)) output; buffer: \(buffer) frames")
+}
+
+@MainActor
+func startupTrial(_ dev: AudioObjectID, label: String, pause: Double,
+                  headphonesRunning: Bool = false) -> StartupResult? {
+    print("\(label): \(headphonesRunning ? "headphone warm-up" : "idle pause") \(pause)s ...")
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: pause))
+    guard AudioDevices.isAlive(dev) else {
+        print("  \(label): device unavailable or disconnected"); return nil
+    }
+    // HAL IOProcs normally supply native Float32. Reject other formats rather
+    // than interpreting PCM integers as floats and reporting misleading timings.
+    guard let stream = objectIDs(dev, address(kAudioDevicePropertyStreams,
+                                              kAudioObjectPropertyScopeInput)).first else {
+        print("  \(label): no input streams"); return nil
+    }
+    var format = AudioStreamBasicDescription()
+    var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+    var formatAddress = address(kAudioStreamPropertyVirtualFormat)
+    let formatStatus = AudioObjectGetPropertyData(stream, &formatAddress, 0, nil, &formatSize, &format)
+    guard formatStatus == noErr, format.mFormatID == kAudioFormatLinearPCM,
+          format.mFormatFlags & kAudioFormatFlagIsFloat != 0, format.mBitsPerChannel == 32,
+          format.mSampleRate.isFinite, format.mSampleRate >= 100, format.mSampleRate <= 768_000 else {
+        print("  \(label): unsupported input format (requires Float32 PCM); status=\(formatStatus)")
+        return nil
+    }
+    let rate = format.mSampleRate
+    startupCapacity = Int(ceil(rate * 3))
+    startupBlockFrames = max(1, Int((rate * 0.01).rounded()))
+    let blockCapacity = (startupCapacity + startupBlockFrames - 1) / startupBlockFrames
+    let samples = UnsafeMutablePointer<Float>.allocate(capacity: startupCapacity)
+    samples.initialize(repeating: 0, count: startupCapacity)
+    let blockTimes = UnsafeMutablePointer<Double>.allocate(capacity: blockCapacity)
+    blockTimes.initialize(repeating: 0, count: blockCapacity)
+    startupSamples = samples
+    startupBlockTimes = blockTimes
+    startupSampleCount = 0
+    startupFirstIO = 0
+    startupFirstSound = 0
+    var timebase = mach_timebase_info_data_t()
+    mach_timebase_info(&timebase)
+    let millisecondsPerTick = Double(timebase.numer) / Double(timebase.denom) / 1_000_000
+    startupTicksPerFrame = 1000 / rate / millisecondsPerTick
+    defer {
+        startupSamples = nil
+        startupBlockTimes = nil
+        samples.deallocate()
+        blockTimes.deallocate()
+    }
+    var proc: AudioDeviceIOProcID?
+    let created = AudioDeviceCreateIOProcID(dev, startupIOProc, nil, &proc)
+    guard created == noErr, let proc else {
+        print("  \(label): AudioDeviceCreateIOProcID failed: \(created)"); return nil
+    }
+    let outputs = streamCount(dev, kAudioObjectPropertyScopeOutput)
+    if outputs > 0 {
+        let usage = AudioDevices.setIOProcStreamUsage(dev, proc: proc,
+            scope: kAudioObjectPropertyScopeOutput, enabled: [Bool](repeating: false, count: outputs))
+        guard usage == noErr else {
+            AudioDeviceDestroyIOProcID(dev, proc)
+            print("  \(label): cannot disable output streams for input-only trial: \(usage)"); return nil
+        }
+    }
+    let running = uint32(dev, address(kAudioDevicePropertyDeviceIsRunningSomewhere))
+    let warm: String
+    if running == 1 {
+        warm = headphonesRunning ? " (already running - headphone IOProc keeps it warm)"
+            : " (already running - another app keeps it warm)"
+    } else {
+        warm = running == nil ? " (running-somewhere status unavailable)" : " (idle before start)"
+    }
+    let beforeStart = mach_absolute_time()
+    let status = AudioDeviceStart(dev, proc)
+    let afterStart = mach_absolute_time()
+    guard status == noErr else {
+        AudioDeviceDestroyIOProcID(dev, proc)
+        print("  \(label): AudioDeviceStart failed: \(status)\(warm)")
+        print("  Check terminal microphone access in System Settings > Privacy & Security > Microphone.")
+        return nil
+    }
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 3))
+    let stopped = AudioDeviceStop(dev, proc)
+    let destroyed = AudioDeviceDestroyIOProcID(dev, proc)
+    guard stopped == noErr, destroyed == noErr else {
+        print("  \(label): IOProc cleanup failed: stop=\(stopped), destroy=\(destroyed)")
+        // Exit before freeing storage if Core Audio might still be using it.
+        exit(1)
+    }
+    func elapsed(_ ticks: UInt64) -> Double {
+        ticks == 0 ? .infinity : (Double(ticks) - Double(beforeStart)) * millisecondsPerTick
+    }
+    var rms: [Double] = []
+    let blocks = startupSampleCount / startupBlockFrames
+    for block in 0..<blocks {
+        var sum = 0.0
+        for frame in 0..<startupBlockFrames {
+            let value = Double(samples[block * startupBlockFrames + frame])
+            sum += value * value
+        }
+        rms.append(sqrt(sum / Double(startupBlockFrames)))
+    }
+    let finalSecondBlocks = max(1, Int((rate / Double(startupBlockFrames)).rounded()))
+    let floor = blocks >= finalSecondBlocks ? startupMedian(Array(rms.suffix(finalSecondBlocks))) : 0
+    var settled = Double.infinity
+    if floor > 0, let block = rms.firstIndex(where: { $0 > 0 && abs(20 * log10($0 / floor)) <= 10 }) {
+        settled = (blockTimes[block] - Double(beforeStart)) * millisecondsPerTick
+    }
+    // A 10 ms block can start in the callback before the first non-zero one;
+    // audio can't settle before it starts, so clamp to first sound.
+    let firstSound = elapsed(startupFirstSound)
+    let result = StartupResult(start: elapsed(afterStart), firstIO: elapsed(startupFirstIO),
+                               firstSound: firstSound, settled: max(settled, firstSound))
+    print("  \(label): \(startupMetrics(result)) ms\(warm)")
+    print(String(format: "    Captured %.2fs; final-second median RMS: %@%@",
+                 Double(startupSampleCount) / rate, dBFS(Float(floor)),
+                 blocks < finalSecondBlocks ? " (less than 1s of audio; settled unavailable)" : ""))
+    return result
+}
+
+@MainActor
+func startupHeadphoneTrial(_ dev: AudioObjectID) -> StartupResult? {
+    let outputs = streamCount(dev, kAudioObjectPropertyScopeOutput)
+    guard outputs > 0 else {
+        print("C skipped: device has no output streams."); return nil
+    }
+    var proc: AudioDeviceIOProcID?
+    let created = AudioDeviceCreateIOProcID(dev, startupHeadphoneIOProc, nil, &proc)
+    guard created == noErr, let proc else {
+        print("C skipped: headphone AudioDeviceCreateIOProcID failed: \(created)"); return nil
+    }
+    defer { AudioDeviceDestroyIOProcID(dev, proc) }
+    let inputs = streamCount(dev, kAudioObjectPropertyScopeInput)
+    let inputUsage = AudioDevices.setIOProcStreamUsage(dev, proc: proc,
+        scope: kAudioObjectPropertyScopeInput, enabled: [Bool](repeating: false, count: inputs))
+    let outputUsage = AudioDevices.setIOProcStreamUsage(dev, proc: proc,
+        scope: kAudioObjectPropertyScopeOutput, enabled: [Bool](repeating: true, count: outputs))
+    print("Headphone stream usage: inputs disabled \(inputUsage == noErr ? "OK" : "FAILED (\(inputUsage))"); " +
+          "outputs enabled \(outputUsage == noErr ? "OK" : "FAILED (\(outputUsage))")")
+    guard inputUsage == noErr, outputUsage == noErr else {
+        print("C skipped: could not configure output-only IOProc."); return nil
+    }
+    let started = AudioDeviceStart(dev, proc)
+    guard started == noErr else {
+        print("C skipped: headphone AudioDeviceStart failed: \(started)"); return nil
+    }
+    defer { AudioDeviceStop(dev, proc) }
+    return startupTrial(dev, label: "C1", pause: 3, headphonesRunning: true)
+}
+
+@MainActor
+func runStartup(_ args: [String]) {
+    setbuf(stdout, nil)
+    var match = "seiren"
+    var trials = 3
+    var pause = 10.0
+    var noFX = false
+    var fxOnly = false
+    var index = 0
+    func usage() -> Never {
+        print("Usage: seiren-probe startup [--device <name-substring>] [--trials N] [--pause S] [--no-fx | --fx-only]")
+        print("N must be a positive integer; S must be finite and non-negative.")
+        exit(1)
+    }
+    while index < args.count {
+        let option = args[index]
+        if option == "--no-fx" { noFX = true; index += 1; continue }
+        if option == "--fx-only" { fxOnly = true; index += 1; continue }
+        guard index + 1 < args.count else { usage() }
+        let value = args[index + 1]
+        switch option {
+        case "--device":
+            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { usage() }
+            match = value
+        case "--trials":
+            guard let count = Int(value), count > 0 else { usage() }
+            trials = count
+        case "--pause":
+            guard let seconds = Double(value), seconds.isFinite, seconds >= 0 else { usage() }
+            pause = seconds
+        default: usage()
+        }
+        index += 2
+    }
+    if noFX && fxOnly { usage() }
+    guard let device = AudioDevices.candidates().first(where: {
+        $0.isEligible && isPhysical($0.id) && AudioDevices.isAlive($0.id)
+            && $0.name.localizedCaseInsensitiveContains(match)
+    }) else {
+        print("No eligible physical input whose name contains '\(match)'.")
+        print("Connect the microphone and check Core Audio access if running in a sandbox.")
+        exit(1)
+    }
+    print("seiren-probe startup; macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+    startupDeviceHeader(device.id)
+    print("Stay quiet while this runs: settled compares startup audio against the final-second noise floor.")
+    print("Each trial records for 3s. All timings are ms since just before AudioDeviceStart.")
+    print("start = call duration; first IO = first callback; first sound = first callback with a non-zero sample.")
+    print("settled = first 10ms block within 10 dB of the final-second median RMS; never = not observed.")
+    print("A warm row cannot establish cold-start latency. No device rate or buffer settings are changed.")
+    var sections: [(String, [StartupResult])] = []
+    var direct: [StartupResult] = []
+    if !fxOnly {
+        print("\nA. Mic alone, cold (\(trials) trials, \(pause)s idle before each)")
+        for trial in 1...trials {
+            if let result = startupTrial(device.id, label: "A\(trial)", pause: pause) { direct.append(result) }
+        }
+        sections.append(("A", direct))
+        print("\nB. Mic alone, idle-length check")
+        var idle: [StartupResult] = []
+        for seconds in [1.0, 10.0, 30.0] {
+            if let result = startupTrial(device.id, label: "B (\(Int(seconds))s idle)", pause: seconds) {
+                idle.append(result)
+            }
+        }
+        sections.append(("B (1/10/30s idle)", idle))
+        print("\nC. Headphone side already running (3s warm-up, then one input trial)")
+        let headphone = startupHeadphoneTrial(device.id)
+        sections.append(("C", headphone.map { [$0] } ?? []))
+    }
+    print("\nD. Through Seiren FX")
+    var results: [StartupResult] = []
+    if noFX {
+        print("D skipped: --no-fx.")
+    } else if let fx = AudioDevices.fxDevice() {
+        print("The Seiren menu-bar app must be running in Auto for D to mean anything.")
+        print("Its selected physical input must be \(device.name).")
+        startupDeviceHeader(fx)
+        for trial in 1...trials {
+            if let result = startupTrial(fx, label: "D\(trial)", pause: pause) { results.append(result) }
+        }
+    } else {
+        print("D skipped: Seiren FX is not installed or available.")
+    }
+    sections.append(("D", results))
+    print("\nSummary: median timings in ms (never values included; failed/skipped trials excluded)")
+    for (name, values) in sections {
+        guard !values.isEmpty else { print("  \(name): no measurements"); continue }
+        let median = StartupResult(start: startupMedian(values.map(\.start)),
+            firstIO: startupMedian(values.map(\.firstIO)), firstSound: startupMedian(values.map(\.firstSound)),
+            settled: startupMedian(values.map(\.settled)))
+        print("  \(name) (\(values.count) trials): \(startupMetrics(median))")
+    }
+    let directSound = startupMedian(direct.map(\.firstSound))
+    let fx = startupMedian(results.map(\.firstSound))
+    if directSound.isFinite && fx.isFinite {
+        print(String(format: "D - A median first sound: %+.1f ms (estimated app overhead; compare cold/warm status).",
+                     fx - directSound))
+    } else {
+        print("D - A median first sound: unavailable (requires observed sound in both sections).")
+    }
+}
+
 /// Drive the mixer and record its actual virtual input in the same process.
 /// The recorder bypass exists only for this probe; normal app use stays idle
 /// until another process records Stream Mix. No system output routing changes.
@@ -812,6 +1150,7 @@ if CommandLine.arguments.count >= 2 {
     case "mix": runMix(Array(CommandLine.arguments.dropFirst(2))); exit(0)
     case "inputs": runInputs(); exit(0)
     case "listen": runListen(Array(CommandLine.arguments.dropFirst(2))); exit(0)
+    case "startup": runStartup(Array(CommandLine.arguments.dropFirst(2))); exit(0)
     default: break
     }
 }

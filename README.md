@@ -317,6 +317,7 @@ swift run seiren-probe             # read-only dump of the Seiren's audio contro
 swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw
 swift run seiren-probe inputs      # list inputs and which one Automatic would pick
 swift run seiren-probe listen "Seiren FX"   # what other apps hear on Seiren FX, per second
+swift run seiren-probe startup     # measure cold mic startup and Seiren FX overhead
 swift run seiren-probe mix 5 --app com.spotify.client   # run the Stream Mixer, report every channel's level
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
