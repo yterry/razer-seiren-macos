@@ -154,6 +154,10 @@ in, and quietly waits when it's unplugged. Then shape and clean your voice under
   already be on anyway, and you're not "always recording" the rest of the day.
   *(Uses the macOS 14+ per-process audio API; on older macOS it behaves like
   "On — always".)*
+  So your first words aren't cut off, Auto keeps the Seiren's headphone side running silently while you're at the Mac.
+  When an app starts recording, the mic is already awake and your voice reaches the app in under a tenth of a second, instead of about a quarter of a second from cold.
+  This doesn't record anything or turn on the recording indicator, and it pauses while the display or the Mac sleeps.
+  The V3 Mini has no headphone side, so it still starts from cold.
 - **Off**: not monitoring.
 
 ### When the Seiren is unplugged (Input)
@@ -317,6 +321,7 @@ swift run seiren-probe             # read-only dump of the Seiren's audio contro
 swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw
 swift run seiren-probe inputs      # list inputs and which one Automatic would pick
 swift run seiren-probe listen "Seiren FX"   # what other apps hear on Seiren FX, per second
+swift run seiren-probe startup     # measure cold mic startup and Seiren FX overhead
 swift run seiren-probe mix 5 --app com.spotify.client   # run the Stream Mixer, report every channel's level
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```

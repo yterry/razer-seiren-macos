@@ -1,5 +1,6 @@
 import XCTest
 import CoreAudio
+import Darwin
 import SeirenDSP
 @testable import SeirenKit
 
@@ -156,5 +157,36 @@ final class RouteProcTests: XCTestCase {
         XCTAssertEqual(d.outputBuffers, 1)
         XCTAssertEqual(d.monitorBuffers, 0)
         XCTAssertGreaterThanOrEqual(d.inputPeak, 0.5, "peak tracks |raw mic| (never below this run's 0.5)")
+    }
+
+    func testFirstNonzeroMicTimestampIgnoresSilenceAndOnlyRecordsOnce() {
+        gDiagFirstInputTime = 0
+        defer { gDiagFirstInputTime = 0 }
+        let inputs = bufferList(count: 1, frames: 16, fill: 0)
+        let outputs = bufferList(count: 1, frames: 16, fill: 0)
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(gDiagFirstInputTime, 0)
+
+        let before = mach_absolute_time()
+        inputs[0].mData!.assumingMemoryBound(to: Float.self)[15] = -0.25
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        let first = gDiagFirstInputTime
+        XCTAssertGreaterThanOrEqual(first, before)
+        XCTAssertLessThanOrEqual(first, mach_absolute_time())
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(gDiagFirstInputTime, first)
+    }
+
+    func testStandbyZeroesEveryOutputBufferWithoutReadingInput() {
+        let inputs = bufferList(count: 1, frames: 16, fill: 0.75)
+        let outputs = bufferList(count: 3, frames: 32, fill: 0.5)
+        // Disabled streams may have null storage; the callback must skip them.
+        outputs[1].mData = nil
+        var ts = AudioTimeStamp()
+        XCTAssertEqual(standbyIOProc(0, &ts, inputs.unsafePointer, &ts,
+                                     outputs.unsafeMutablePointer, &ts, nil), noErr)
+        XCTAssertEqual(samples(outputs, 0, frames: 32), [Float](repeating: 0, count: 32))
+        XCTAssertEqual(samples(outputs, 2, frames: 32), [Float](repeating: 0, count: 32))
+        XCTAssertEqual(samples(inputs, 0, frames: 16), [Float](repeating: 0.75, count: 16))
     }
 }

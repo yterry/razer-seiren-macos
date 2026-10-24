@@ -28,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var mixerMenu: NSMenu?
     private var mixerRows: [MixerChannelView] = []
     private var displayedMixerState: MixerMenuState?
+    // Who is at the Mac, for Auto's standby (see applicationDidFinishLaunching).
+    private var screensAsleep = false
+    private var systemAsleep = false
+    private var sessionInactive = false
 
     private struct MixerMenuState: Equatable {
         var enabled: Bool
@@ -87,6 +91,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(systemDidWake),
             name: NSWorkspace.didWakeNotification, object: nil)
+        // Auto's standby keeps the Seiren's headphone side running, and running
+        // output holds an idle-sleep assertion, so it only runs while someone
+        // is at the Mac: displays awake, system awake, this user's session active.
+        for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification,
+                     NSWorkspace.willSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                self, selector: #selector(standbyConditionChanged(_:)), name: name, object: nil)
+        }
 
         rebuildMenu()
 
@@ -828,7 +842,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     @objc private func systemDidWake() {
+        systemAsleep = false
+        updateStandbyAllowed()
         lighting.reassert()
+    }
+
+    @objc private func standbyConditionChanged(_ note: Notification) {
+        switch note.name {
+        case NSWorkspace.screensDidSleepNotification: screensAsleep = true
+        case NSWorkspace.screensDidWakeNotification: screensAsleep = false
+        case NSWorkspace.willSleepNotification: systemAsleep = true
+        case NSWorkspace.sessionDidResignActiveNotification: sessionInactive = true
+        case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false
+        default: return
+        }
+        updateStandbyAllowed()
+    }
+
+    private func updateStandbyAllowed() {
+        engine.setStandbyAllowed(!screensAsleep && !systemAsleep && !sessionInactive)
     }
 
     @objc private func openInputMonitoringSettings() {

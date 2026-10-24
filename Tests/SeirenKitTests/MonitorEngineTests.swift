@@ -247,6 +247,98 @@ final class MonitorEngineTests: XCTestCase {
                                                     fromPoll: true), .waiting)
     }
 
+    func testRecorderAbsenceKeepsRouteRunningWithinGrace() {
+        let present = MonitorEngine.debouncedRunDecision(
+            decision: .running, current: .running, recorderDriven: true, routeMatches: true, absenceSince: nil, now: 100)
+        XCTAssertEqual(present.state, .running)
+        XCTAssertNil(present.absenceSince)
+        let absent = MonitorEngine.debouncedRunDecision(
+            decision: .waiting, current: present.state, recorderDriven: true, routeMatches: true,
+            absenceSince: present.absenceSince, now: 101)
+        XCTAssertEqual(absent.state, .running)
+        XCTAssertEqual(absent.absenceSince, 101)
+        let stillAbsent = MonitorEngine.debouncedRunDecision(
+            decision: .waiting, current: absent.state, recorderDriven: true, routeMatches: true,
+            absenceSince: absent.absenceSince, now: 101.999)
+        XCTAssertEqual(stillAbsent.state, .running)
+        XCTAssertEqual(stillAbsent.absenceSince, 101)
+    }
+
+    func testRecorderAbsenceStopsAtOrAfterGrace() {
+        for now in [101.0, 101.5, 105] {
+            let result = MonitorEngine.debouncedRunDecision(
+                decision: .waiting, current: .running, recorderDriven: true, routeMatches: true, absenceSince: 100, now: now)
+            XCTAssertEqual(result.state, .waiting)
+        }
+    }
+
+    func testRecorderPresenceClearsAbsenceAndNextAbsenceStartsNewGrace() {
+        let present = MonitorEngine.debouncedRunDecision(
+            decision: .running, current: .running, recorderDriven: true, routeMatches: true, absenceSince: 100, now: 100.5)
+        XCTAssertNil(present.absenceSince)
+        let absent = MonitorEngine.debouncedRunDecision(
+            decision: .waiting, current: present.state, recorderDriven: true, routeMatches: true,
+            absenceSince: present.absenceSince, now: 102)
+        XCTAssertEqual(absent.state, .running)
+        XCTAssertEqual(absent.absenceSince, 102)
+    }
+
+    func testOtherStopReasonsBypassRecorderGrace() {
+        for decision in [MonitorEngine.State.stopped, .noDevice, .needsFX, .permissionDenied, .failed(-1)] {
+            let result = MonitorEngine.debouncedRunDecision(
+                decision: decision, current: .running, recorderDriven: true, routeMatches: true, absenceSince: 100, now: 100.1)
+            XCTAssertEqual(result.state, decision)
+            XCTAssertNil(result.absenceSince)
+        }
+        let alwaysToAuto = MonitorEngine.debouncedRunDecision(
+            decision: .waiting, current: .running, recorderDriven: false, routeMatches: true,
+            absenceSince: nil, now: 100)
+        XCTAssertEqual(alwaysToAuto.state, .waiting)
+        XCTAssertNil(alwaysToAuto.absenceSince)
+        // A changed source / FX identity or a dead aggregate cannot retain the route.
+        let changed = MonitorEngine.debouncedRunDecision(
+            decision: .waiting, current: .running, recorderDriven: true, routeMatches: false, absenceSince: 100, now: 100.1)
+        XCTAssertEqual(changed.state, .waiting)
+        XCTAssertNil(changed.absenceSince)
+        for current in [MonitorEngine.State.waiting, .stopped, .failed(-1), .permissionDenied] {
+            let idle = MonitorEngine.debouncedRunDecision(
+                decision: .waiting, current: current, recorderDriven: true, routeMatches: true, absenceSince: nil, now: 100)
+            XCTAssertEqual(idle.state, .waiting)
+            XCTAssertNil(idle.absenceSince)
+        }
+    }
+
+    func testStandbyRequiresAutoSeirenOutputsFXAndHostPermission() {
+        let pro = MonitorEngine.Source(device: mic(1, "Seiren Pro", output: true), isSeiren: true)
+        let mini = MonitorEngine.Source(device: mic(2, "Seiren Mini"), isSeiren: true)
+        let other = MonitorEngine.Source(device: mic(3, "Headset", output: true), isSeiren: false)
+        XCTAssertTrue(MonitorEngine.shouldRunStandby(mode: .auto, source: pro, fxInstalled: true, allowed: true))
+        for mode in [MonitorEngine.Mode.off, .always] {
+            XCTAssertFalse(MonitorEngine.shouldRunStandby(mode: mode, source: pro, fxInstalled: true, allowed: true))
+        }
+        for source in [nil, mini, other] {
+            XCTAssertFalse(MonitorEngine.shouldRunStandby(mode: .auto, source: source, fxInstalled: true, allowed: true))
+        }
+        XCTAssertFalse(MonitorEngine.shouldRunStandby(mode: .auto, source: pro, fxInstalled: false, allowed: true))
+        XCTAssertFalse(MonitorEngine.shouldRunStandby(mode: .auto, source: pro, fxInstalled: true, allowed: false))
+    }
+
+    func testStandbyHostPermissionAndShutdownWithNoDevice() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        engine.setMode(.auto)
+        XCTAssertFalse(engine.isStandbyRunning)
+        engine.setStandbyAllowed(false)
+        XCTAssertFalse(engine.isStandbyRunning)
+        XCTAssertEqual(engine.state, .noDevice)
+        engine.setStandbyAllowed(true)
+        XCTAssertFalse(engine.isStandbyRunning)
+        engine.shutdown()
+        engine.setStandbyAllowed(false)
+        engine.setStandbyAllowed(true)
+        XCTAssertFalse(engine.isStandbyRunning)
+        XCTAssertEqual(engine.state, .stopped)
+    }
+
     func testEveryOwnUIDAndVirtualTransportIsIneligibleEvenWhenPinnedOrDefault() {
         let builtIn = mic(1, "Mac mic", builtIn: true)
         let excluded = [

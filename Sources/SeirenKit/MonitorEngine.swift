@@ -58,6 +58,16 @@ nonisolated(unsafe) private var gDiagCallbacks: Int64 = 0
 nonisolated(unsafe) private var gDiagInputBuffers: Int32 = 0
 nonisolated(unsafe) private var gDiagOutputBuffers: Int32 = 0
 nonisolated(unsafe) private var gDiagInputPeak: Float = 0
+nonisolated(unsafe) var gDiagFirstInputTime: UInt64 = 0
+
+/// Output-only standby never reads the input buffers or touches route state.
+nonisolated(unsafe) let standbyIOProc: AudioDeviceIOProc = {
+    (_, _, _, _, outData, _, _) -> OSStatus in
+    for buffer in UnsafeMutableAudioBufferListPointer(outData) {
+        if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+    }
+    return noErr
+}
 
 /// The RT callback: fan input channel 0 to every output channel, scaled by the
 /// global level; zero any trailing/extra output frames so we never emit stale
@@ -168,6 +178,7 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
     var f = 0
     while f < frames {
         let v = mic[f * micCh]
+        if v != 0 && gDiagFirstInputTime == 0 { gDiagFirstInputTime = mach_absolute_time() }
         fxBuf[f] = v
         let a = v < 0 ? -v : v
         if a > peak { peak = a }
@@ -377,6 +388,10 @@ public final class MonitorEngine {
         didSet { if isRoutingThroughFX != oldValue { notify() } }
     }
 
+    public private(set) var isStandbyRunning = false {
+        didSet { if isStandbyRunning != oldValue { notify() } }
+    }
+
     public func setEQEnabled(_ on: Bool) {
         guard on != eqEngine.isEnabled else { return }
         eqEngine.setEnabled(on)
@@ -441,6 +456,7 @@ public final class MonitorEngine {
     private let fallbackEnabled: Bool
     private var selectedSource: Source?
     private var procSourceID: AudioObjectID?      // physical source of the live route
+    private var procSourceUID: String?
     private var procFXDeviceID: AudioObjectID?    // FX identity when the route started
     private var observedFXDeviceID: AudioObjectID?
     private var isShutdown = false
@@ -450,6 +466,17 @@ public final class MonitorEngine {
     private var liveSampleRate: Double = 0        // rate of the device the proc runs on (diagnostics)
     private var autoTimer: Timer?
     private var startFailure: StartFailure?
+    private var recorderAbsentSince: TimeInterval?
+    private var routeWasRecorderDriven = false
+    private var lastRecorderPresence: Bool?
+    private var startupLogTimer: Timer?
+    private var routeStartedAt: UInt64?
+    private var standbyAllowed = true
+    private var standbyProcID: AudioDeviceIOProcID?
+    private var standbyDeviceID: AudioObjectID?
+    private var standbyDeviceUID: String?
+    private static var standbyRejectedUIDs: Set<String> = []
+    private var standbyValidationTimer: Timer?
 
     /// The EQ. Coefficients are pushed to the C DSP core; the route IOProc reads
     /// them on the RT thread. EQ only takes effect on the creator (aggregate)
@@ -510,9 +537,10 @@ public final class MonitorEngine {
     /// can't touch the non-`Sendable` listener block, and this is a
     /// process-lifetime object); exists for tests and dynamic hosts.
     public func shutdown() {
-        stopAutoTimer()
-        teardownProc()
         isShutdown = true
+        stopAutoTimer()
+        teardownProc(reason: "shutdown")
+        stopStandby(reason: "shutdown")
         selectedSource = nil
         if let block = devicesListenerBlock {
             AudioObjectRemovePropertyListenerBlock(
@@ -536,8 +564,17 @@ public final class MonitorEngine {
     /// Set the monitoring mode (the user's intent). Idempotent.
     public func setMode(_ newMode: Mode) {
         isShutdown = false
+        if newMode != mode { stopStandby(reason: "mode changed to \(newMode.rawValue)") }
         mode = newMode
         installDevicesListenerIfNeeded()
+        reconcile()
+    }
+
+    /// Hosts suspend standby while the display or user session is asleep so
+    /// output I/O does not keep an idle-system-sleep assertion alive.
+    public func setStandbyAllowed(_ allowed: Bool) {
+        guard standbyAllowed != allowed else { return }
+        standbyAllowed = allowed
         reconcile()
     }
 
@@ -569,12 +606,15 @@ public final class MonitorEngine {
         let source = Self.selectSource(from: candidates, preference: inputPreference,
                                        defaultInputUID: defaultUID, match: deviceNameMatch,
                                        fxInstalled: fx != nil && fallbackEnabled,
-                                       otherInputsSupported: otherInputsSupported)
+                                       otherInputsSupported: otherInputsSupported).flatMap {
+            AudioDevices.isAlive($0.device.id) ? $0 : nil
+        }
         selectedSource = source
         activeSource = mode == .off ? nil : source.map {
             InputDevice(uid: $0.device.uid, name: $0.device.name, isSeiren: $0.isSeiren)
         }
         deviceHasHeadphoneOutput = source.map { $0.isSeiren && $0.device.hasOutput } ?? true
+        reconcileStandby(source: source, fxInstalled: fx != nil)
 
         let dependsOnRecorders = mode == .auto || (mode != .off && source?.isSeiren == false)
         if dependsOnRecorders { startAutoTimer() } else { stopAutoTimer() }
@@ -583,10 +623,12 @@ public final class MonitorEngine {
         if let fx { triggers.insert(fx) }
         if includeStreamMixInTriggers, let streamMix { triggers.insert(streamMix) }
         let recording: Set<AudioObjectID>
+        var recordingProcesses: [AudioDevices.RecordingProcess]?
         if dependsOnRecorders {
             // Before macOS 14 there is no per-process API; only Seirens retain
             // always-on behavior. Other inputs require positive recorder evidence.
-            recording = AudioDevices.recordingProcesses(fromAny: triggers).map {
+            recordingProcesses = AudioDevices.recordingProcesses(fromAny: triggers)
+            recording = recordingProcesses.map {
                 Set($0.flatMap(\.inputDeviceIDs))
             } ?? (source?.isSeiren == true ? triggers : [])
         } else {
@@ -596,18 +638,149 @@ public final class MonitorEngine {
                                       recordingDevices: recording, fxDeviceID: fx,
                                       streamMixDeviceID: streamMix,
                                       includeStreamMixInTriggers: includeStreamMixInTriggers)
-        if decision == .running, let source {
-            ensureRunning(on: source.device.id, fx: fx)
+        if dependsOnRecorders {
+            let present = !recording.isEmpty
+            if present != lastRecorderPresence {
+                AudioDevices.debugLog("[seiren auto] recorder \(present ? "present" : "absent") " +
+                    "processes=\(recordingProcesses?.map { "pid=\($0.pid) bundle=\($0.bundleID ?? "(no bundle id)")" } ?? [])")
+                lastRecorderPresence = present
+            }
         } else {
-            teardownProc()
+            lastRecorderPresence = nil
+        }
+        let routeMatches = procID != nil && procSourceID == source?.device.id
+            && procSourceUID == source?.device.uid && procFXDeviceID == fx
+            && procDeviceID.map(AudioDevices.isAlive) == true
+        let debounced = Self.debouncedRunDecision(
+            decision: decision, current: state, recorderDriven: routeWasRecorderDriven, routeMatches: routeMatches,
+            absenceSince: recorderAbsentSince, now: ProcessInfo.processInfo.systemUptime)
+        recorderAbsentSince = debounced.absenceSince
+        if debounced.state == .running, let source {
+            ensureRunning(on: source.device.id, fx: fx)
+            if decision == .running, procID != nil { routeWasRecorderDriven = dependsOnRecorders }
+        } else {
+            let reason: String
+            switch decision {
+            case .stopped: reason = "mode off"
+            case .noDevice: reason = "device gone"
+            case .needsFX: reason = "needs FX"
+            case .waiting:
+                reason = routeMatches ? "debounced recorder absence" : "route identity changed or device gone"
+            default: reason = "\(decision)"
+            }
+            teardownProc(reason: reason)
             state = Self.reconciledState(decision: decision, current: state, fromPoll: fromPoll)
         }
     }
 
     private func pollAuto() { reconcile(fromPoll: true) }
 
+    // MARK: - Output-only warm standby
+
+    private func reconcileStandby(source: Source?, fxInstalled: Bool) {
+        guard Self.shouldRunStandby(mode: mode, source: source, fxInstalled: fxInstalled,
+                                    allowed: standbyAllowed), let source else {
+            let reason: String
+            if mode != .auto { reason = "mode \(mode.rawValue)" }
+            else if !standbyAllowed { reason = "host suspended standby" }
+            else if source == nil { reason = "device gone" }
+            else if !fxInstalled { reason = "FX unavailable" }
+            else { reason = "source has no Seiren headphone output" }
+            stopStandby(reason: reason)
+            return
+        }
+        let device = source.device
+        if standbyDeviceID != device.id || standbyDeviceUID != device.uid || !AudioDevices.isAlive(device.id) {
+            stopStandby(reason: "source changed or device gone")
+        }
+        guard !Self.standbyRejectedUIDs.contains(device.uid), AudioDevices.isAlive(device.id) else { return }
+        guard standbyProcID == nil else {
+            scheduleStandbyValidation()
+            return
+        }
+        var pid: AudioDeviceIOProcID?
+        let created = AudioDeviceCreateIOProcID(device.id, standbyIOProc, nil, &pid)
+        guard created == noErr, let pid else {
+            AudioDevices.debugLog("[seiren standby] start failed: create IOProc status=\(created)")
+            return
+        }
+        let inputCount = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeInput)
+        let outputCount = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeOutput)
+        let inputs = AudioDevices.setIOProcStreamUsage(device.id, proc: pid,
+            scope: kAudioObjectPropertyScopeInput, enabled: Array(repeating: false, count: inputCount))
+        guard inputs == noErr else {
+            AudioDeviceDestroyIOProcID(device.id, pid)
+            AudioDevices.debugLog("[seiren standby] start refused: could not disable input streams status=\(inputs)")
+            return
+        }
+        let outputs = AudioDevices.setIOProcStreamUsage(device.id, proc: pid,
+            scope: kAudioObjectPropertyScopeOutput, enabled: Array(repeating: true, count: outputCount))
+        guard outputs == noErr else {
+            AudioDeviceDestroyIOProcID(device.id, pid)
+            AudioDevices.debugLog("[seiren standby] start failed: enable output streams status=\(outputs)")
+            return
+        }
+        let started = AudioDeviceStart(device.id, pid)
+        guard started == noErr else {
+            AudioDeviceDestroyIOProcID(device.id, pid)
+            AudioDevices.debugLog("[seiren standby] start failed: AudioDeviceStart status=\(started)")
+            return
+        }
+        standbyDeviceID = device.id
+        standbyDeviceUID = device.uid
+        standbyProcID = pid
+        isStandbyRunning = true
+        AudioDevices.debugLog("[seiren standby] start: Auto Seiren with FX, host allowed uid=\(device.uid)")
+        validateStandbyInput()
+        scheduleStandbyValidation()
+    }
+
+    /// Standby must never light the microphone indicator. With the route off,
+    /// the only way this process can be recording the Seiren is standby itself.
+    /// The Stream Mixer can make this process an input client of Seiren FX, so
+    /// only the Seiren counts, not the process-wide input flag alone.
+    private func validateStandbyInput() {
+        guard procID == nil, let uid = standbyDeviceUID, let device = standbyDeviceID,
+              let process = AudioDevices.ownProcessObject(),
+              AudioDevices.processIsRunningInput(process) == true else { return }
+        let inputs = AudioDevices.processInputDeviceIDs(process)
+        guard inputs.contains(device) else { return }
+        Self.standbyRejectedUIDs.insert(uid)
+        stopStandby(reason: "this process now records the Seiren (inputs=\(inputs)); " +
+                    "disabled for process lifetime uid=\(uid)")
+    }
+
+    private func scheduleStandbyValidation() {
+        guard !isShutdown, standbyProcID != nil, procID == nil, standbyValidationTimer == nil else { return }
+        // The HAL's process flags may settle after Start/Stop has returned.
+        let timer = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.standbyValidationTimer = nil
+                self.validateStandbyInput()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        standbyValidationTimer = timer
+    }
+
+    private func stopStandby(reason: String) {
+        standbyValidationTimer?.invalidate()
+        standbyValidationTimer = nil
+        if let device = standbyDeviceID, let pid = standbyProcID {
+            AudioDeviceStop(device, pid)
+            AudioDeviceDestroyIOProcID(device, pid)
+            AudioDevices.debugLog("[seiren standby] stop: \(reason)")
+        }
+        standbyProcID = nil
+        standbyDeviceID = nil
+        standbyDeviceUID = nil
+        isStandbyRunning = false
+    }
+
     private func ensureRunning(on dev: AudioObjectID, fx: AudioObjectID?) {
-        if procID != nil, procSourceID == dev, procFXDeviceID == fx,
+        if procID != nil, procSourceID == dev, procSourceUID == selectedSource?.device.uid,
+           procFXDeviceID == fx,
            let procDeviceID, AudioDevices.isAlive(procDeviceID) {
             state = .running
             return
@@ -616,8 +789,9 @@ public final class MonitorEngine {
         // entry point must respect backoff, including those self-made events.
         guard Self.shouldRetryStart(sourceID: dev, fxDeviceID: fx, failure: startFailure,
                                     now: ProcessInfo.processInfo.systemUptime) else { return }
-        teardownProc()
+        teardownProc(reason: "route identity changed or device gone")
         procSourceID = dev
+        procSourceUID = selectedSource?.device.uid
         procFXDeviceID = fx
         startProc(on: dev)
         startFailure = StartFailure.recording(result: state, sourceID: dev, fxDeviceID: fx,
@@ -639,24 +813,32 @@ public final class MonitorEngine {
         // --- Creator path: route through SeirenFX -----------------------------
         var fxFailure: OSStatus?   // why the FX route didn't come up, if it didn't
         if let fx = procFXDeviceID {
-            if let agg = createAggregate(source: source, fx: fx) {
+            let aggregateStart = mach_absolute_time()
+            let aggregate = createAggregate(source: source, fx: fx)
+            let aggregateMS = Self.elapsedMilliseconds(since: aggregateStart)
+            if let agg = aggregate {
                 AudioDevices.setBufferFrameSize(agg, preferredBufferFrames)
                 configureSampleRate(AudioDevices.nominalRate(agg))
 
                 var pid: AudioDeviceIOProcID?
                 let created = AudioDeviceCreateIOProcID(agg, routeIOProc, nil, &pid)
                 if created == noErr, let pid {
+                    let startTime = mach_absolute_time()
                     let started = AudioDeviceStart(agg, pid)
+                    let startMS = Self.elapsedMilliseconds(since: startTime)
                     if started == noErr {
                         procID = pid
                         procDeviceID = agg
                         aggregateID = agg
                         isRoutingThroughFX = true
                         state = .running
+                        logRouteStart(aggregateMS: aggregateMS, startTime: startTime, startMS: startMS)
                         installSampleRateListener(on: agg)
                         return
                     }
                     AudioDeviceDestroyIOProcID(agg, pid)
+                    AudioDevices.debugLog("[seiren route] start failed: createAggregate=\(aggregateMS) ms " +
+                        "AudioDeviceStart=\(startMS) ms status=\(started)")
                     if isProbablyPermissionError(started) {
                         AudioHardwareDestroyAggregateDevice(agg)
                         state = .permissionDenied
@@ -664,10 +846,13 @@ public final class MonitorEngine {
                     }
                     fxFailure = started   // non-permission failure → try direct
                 } else {
+                    AudioDevices.debugLog("[seiren route] start failed: create IOProc status=\(created) " +
+                        "createAggregate=\(aggregateMS) ms")
                     fxFailure = created
                 }
                 AudioHardwareDestroyAggregateDevice(agg)
             } else {
+                AudioDevices.debugLog("[seiren route] start failed: createAggregate=\(aggregateMS) ms")
                 fxFailure = kAudioHardwareUnspecifiedError
             }
         }
@@ -689,22 +874,58 @@ public final class MonitorEngine {
         let created = AudioDeviceCreateIOProcID(source, monitorIOProc, nil, &pid)
         guard created == noErr, let pid else {
             state = .failed(created)
+            AudioDevices.debugLog("[seiren route] direct start failed: create IOProc status=\(created)")
             return
         }
+        let startTime = mach_absolute_time()
         let started = AudioDeviceStart(source, pid)
+        let startMS = Self.elapsedMilliseconds(since: startTime)
         if started == noErr {
             procID = pid
             procDeviceID = source
             state = .running
+            logRouteStart(aggregateMS: nil, startTime: startTime, startMS: startMS)
             installSampleRateListener(on: source)
         } else {
             AudioDeviceDestroyIOProcID(source, pid)
             state = isProbablyPermissionError(started)
                 ? .permissionDenied : .failed(started)
+            AudioDevices.debugLog("[seiren route] direct start failed: AudioDeviceStart=\(startMS) ms status=\(started)")
         }
     }
 
-    private func teardownProc() {
+    private static func elapsedMilliseconds(since start: UInt64, until end: UInt64 = mach_absolute_time()) -> Double {
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        return Double(end - start) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000
+    }
+
+    private func logRouteStart(aggregateMS: Double?, startTime: UInt64, startMS: Double) {
+        guard AudioDevices.debugAuto else { return }
+        AudioDevices.debugLog("[seiren route] start: createAggregate=\(aggregateMS.map { String(format: "%.3f ms", $0) } ?? "n/a (direct)") " +
+            "AudioDeviceStart=\(String(format: "%.3f", startMS)) ms")
+        guard isRoutingThroughFX else { return }
+        routeStartedAt = startTime
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.routeStartedAt == startTime, gDiagFirstInputTime >= startTime else { return }
+                let delay = Self.elapsedMilliseconds(since: startTime, until: gDiagFirstInputTime)
+                AudioDevices.debugLog("[seiren route] first non-zero mic sample: \(String(format: "%.3f", delay)) ms after AudioDeviceStart")
+                self.startupLogTimer?.invalidate()
+                self.startupLogTimer = nil
+                self.routeStartedAt = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        startupLogTimer = timer
+    }
+
+    private func teardownProc(reason: String) {
+        startupLogTimer?.invalidate()
+        startupLogTimer = nil
+        routeStartedAt = nil
+        recorderAbsentSince = nil
+        routeWasRecorderDriven = false
         if let dev = procDeviceID, let block = sampleRateListenerBlock {
             AudioObjectRemovePropertyListenerBlock(dev, &sampleRateAddress, DispatchQueue.main, block)
             sampleRateListenerBlock = nil
@@ -712,16 +933,19 @@ public final class MonitorEngine {
         if let dev = procDeviceID, let pid = procID {
             AudioDeviceStop(dev, pid)
             AudioDeviceDestroyIOProcID(dev, pid)
+            AudioDevices.debugLog("[seiren route] stop: \(reason)")
         }
         procID = nil
         procDeviceID = nil
         procSourceID = nil
+        procSourceUID = nil
         procFXDeviceID = nil
         if let agg = aggregateID {
             AudioHardwareDestroyAggregateDevice(agg)
             aggregateID = nil
         }
         isRoutingThroughFX = false
+        scheduleStandbyValidation()
     }
 
     /// Shared by startup and live format changes; internal for DSP tests with
@@ -766,7 +990,7 @@ public final class MonitorEngine {
                                                       fxDeviceID: procFXDeviceID,
                                                       now: ProcessInfo.processInfo.systemUptime)
             }
-            teardownProc()
+            teardownProc(reason: "sample-rate restart failed status=\(result)")
         }
         notify()
     }
@@ -934,6 +1158,24 @@ public final class MonitorEngine {
         fromPoll && decision == .waiting && current.isSticky ? current : decision
     }
 
+    /// Only missing recorder evidence gets a grace period. Identity / liveness
+    /// checks are supplied by the caller so every other stop remains immediate.
+    nonisolated static func debouncedRunDecision(
+        decision: State, current: State, recorderDriven: Bool, routeMatches: Bool,
+        absenceSince: TimeInterval?, now: TimeInterval
+    ) -> (state: State, absenceSince: TimeInterval?) {
+        guard decision == .waiting, current == .running, recorderDriven, routeMatches else { return (decision, nil) }
+        let since = absenceSince ?? now
+        return (now - since < 1 ? .running : .waiting, since)
+    }
+
+    nonisolated static func shouldRunStandby(
+        mode: Mode, source: Source?, fxInstalled: Bool, allowed: Bool
+    ) -> Bool {
+        mode == .auto && source?.isSeiren == true && source?.device.hasOutput == true
+            && fxInstalled && allowed
+    }
+
     nonisolated static func runPolicy(
         mode: Mode, source: Source?, fxInstalled: Bool,
         recordingDevices: Set<AudioObjectID>, fxDeviceID: AudioObjectID?,
@@ -987,6 +1229,7 @@ public final class MonitorEngine {
         gDiagInputBuffers = 0
         gDiagOutputBuffers = 0
         gDiagInputPeak = 0
+        gDiagFirstInputTime = 0
     }
 
     /// Allocate the mono EQ scratch once (process lifetime), big enough for any
