@@ -31,3 +31,39 @@ jobs:
 
       - name: Test
         run: swift test
+
+  intel:
+    name: Build, test & launch (Intel)
+    # GitHub's Intel Mac runner: the tests, RNNoise's SSE2 path included, run
+    # natively on x86_64 here, which an Apple silicon runner can't do.
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      # Releases ship one universal app, so package it the same way and check
+      # that it starts and stays up on an Intel Mac.
+      - name: Package universal .app
+        run: VERSION=0.0.0-ci ARCHS="arm64 x86_64" scripts/package.sh
+
+      - name: Launch the packaged app
+        run: |
+          dist/Seiren.app/Contents/MacOS/seiren-mac &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" || echo "Seiren exited during launch with status $?"
+            exit 1
+          fi
+          kill "$pid"
+          echo "Seiren was still running after 10 s on $(uname -m)"

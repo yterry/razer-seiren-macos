@@ -94,6 +94,9 @@ jobs:
         env:
           # Empty when unsigned - package.sh then ad-hoc-signs, as before.
           SIGN_ID: ${{ steps.sign.outputs.sign_id }}
+          # Universal, so the app opens on Intel Macs too (Info.plist says
+          # macOS 13+, which still includes Intel models).
+          ARCHS: arm64 x86_64
         run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
 
       # Keep the signed build even if notarization times out or fails - the

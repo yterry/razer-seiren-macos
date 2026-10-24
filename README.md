@@ -66,6 +66,8 @@ and stay out of the way. Confirm the route from the terminal with
 
 ## Install & run
 
+Seiren.app runs on macOS 13 or later, on both Apple silicon and Intel Macs.
+
 ### Option A — Homebrew (easiest)
 
 ```sh

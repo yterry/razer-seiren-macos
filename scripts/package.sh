@@ -14,7 +14,6 @@ cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0-dev}"
 EXE="seiren-mac"                       # executable target name in Package.swift
 APP_NAME="Seiren"
-BUILD_DIR=".build/release"
 DIST="dist"
 APP="${DIST}/${APP_NAME}.app"
 CONTENTS="${APP}/Contents"
@@ -28,6 +27,9 @@ for a in ${ARCHS:-}; do ARCH_FLAGS+=(--arch "$a"); done
 
 echo "==> swift build -c release ${ARCH_FLAGS[*]:-(native)}"
 swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+# A multi-arch build goes through the Xcode build system and lands somewhere
+# other than .build/release, so ask SwiftPM where this configuration put it.
+BUILD_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "==> assembling ${APP}"
 rm -rf "${APP}"
@@ -35,6 +37,15 @@ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 
 cp "${BUILD_DIR}/${EXE}" "${CONTENTS}/MacOS/${EXE}"
 chmod +x "${CONTENTS}/MacOS/${EXE}"
+
+# A requested architecture missing from the binary would ship an app that some
+# Macs cannot open, so fail here instead.
+for a in ${ARCHS:-}; do
+  if ! lipo -archs "${CONTENTS}/MacOS/${EXE}" | tr ' ' '\n' | grep -qx "$a"; then
+    echo "error: ${EXE} has no $a slice ($(lipo -archs "${CONTENTS}/MacOS/${EXE}"))" >&2
+    exit 1
+  fi
+done
 
 # Bundle Info.plist = the same plist embedded in the binary, with the version
 # stamped in. PlistBuddy is always present on macOS and is robust vs. sed.
