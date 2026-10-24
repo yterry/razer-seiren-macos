@@ -109,6 +109,10 @@ package enum AudioDevices {
         return object
     }
 
+    package static func processIsRunningInput(_ object: AudioObjectID) -> Bool? {
+        readUInt32(object, kAudioProcessPropertyIsRunningInput).map { $0 == 1 }
+    }
+
     package static func allDevices() -> [AudioObjectID] {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -243,7 +247,19 @@ package enum AudioDevices {
     }
 
     /// Set `SEIREN_MONITOR_DEBUG=1` to log Auto-mode detection to stderr.
-    private static let debugAuto = ProcessInfo.processInfo.environment["SEIREN_MONITOR_DEBUG"] != nil
+    package static let debugAuto = ProcessInfo.processInfo.environment["SEIREN_MONITOR_DEBUG"] != nil
+
+    private static let debugTimestamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
+
+    package static func debugLog(_ message: @autoclosure () -> String) {
+        guard debugAuto else { return }
+        fputs("\(debugTimestamp.string(from: Date())) \(message())\n", stderr)
+    }
 
     /// Apple system processes that "record" from the device for **metering/UI**,
     /// not because you're on a call - so Auto must ignore them or it would stay
@@ -301,17 +317,17 @@ package enum AudioDevices {
             let isUs = excluded.contains(pid)
             let isMeteringUI = bid.map(autoIgnoredBundleIDs.contains) ?? false
             if debugAuto {
-                fputs("[seiren auto] recording-from-Seiren pid=\(pid) " +
+                debugLog("[seiren auto] recording-from-Seiren pid=\(pid) " +
                       "bundle=\(bid ?? "(no bundle id)") self/ancestor=\(isUs) " +
-                      "meteringUI=\(isMeteringUI)\n", stderr)
+                      "meteringUI=\(isMeteringUI)")
             }
             if isUs || isMeteringUI { continue }   // not a real call → ignore
             found.append(RecordingProcess(pid: pid, bundleID: bid, objectID: p,
                                           inputDeviceIDs: inputs))
         }
         if debugAuto {
-            fputs("[seiren auto] -> other app recording from Seiren? \(!found.isEmpty) " +
-                  "(self/ancestors=\(excluded.sorted()))\n", stderr)
+            debugLog("[seiren auto] -> other app recording from Seiren? \(!found.isEmpty) " +
+                     "(self/ancestors=\(excluded.sorted()))")
         }
         return found
     }
@@ -329,7 +345,7 @@ package enum AudioDevices {
         return out.takeRetainedValue() as String
     }
 
-    private static func processInputDeviceIDs(_ proc: AudioObjectID) -> [AudioObjectID] {
+    package static func processInputDeviceIDs(_ proc: AudioObjectID) -> [AudioObjectID] {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioProcessPropertyDevices,
             mScope: kAudioObjectPropertyScopeInput,
