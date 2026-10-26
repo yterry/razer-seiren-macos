@@ -25,11 +25,12 @@ PLIST_SRC="Sources/seiren-mac/Info.plist"   # the canonical, linker-embedded pli
 ARCH_FLAGS=()
 for a in ${ARCHS:-}; do ARCH_FLAGS+=(--arch "$a"); done
 
-echo "==> swift build -c release ${ARCH_FLAGS[*]:-(native)}"
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+# Build the app product directly instead of the all-products aggregate target.
+echo "==> swift build -c release --product ${EXE} ${ARCH_FLAGS[*]:-(native)}"
+swift build -c release --product "${EXE}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
 # A multi-arch build goes through the Xcode build system and lands somewhere
 # other than .build/release, so ask SwiftPM where this configuration put it.
-BUILD_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
+BUILD_DIR="$(swift build -c release --product "${EXE}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "==> assembling ${APP}"
 rm -rf "${APP}"

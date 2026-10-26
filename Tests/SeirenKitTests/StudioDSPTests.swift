@@ -17,7 +17,7 @@ final class StudioDSPTests: XCTestCase {
     func testResamplerRoundTripPreservesVoiceBand() {
         seiren_dsp_reset()
         let n = 4096
-        var x = (0..<n).map { Float(sin(2 * Double.pi * 1000.0 * Double($0) / 96000.0)) * 0.5 }
+        let x = (0..<n).map { Float(sin(2 * Double.pi * 1000.0 * Double($0) / 96000.0)) * 0.5 }
         var down = [Float](repeating: 0, count: n / 2)
         x.withUnsafeBufferPointer { ip in
             down.withUnsafeMutableBufferPointer { op in
@@ -40,7 +40,7 @@ final class StudioDSPTests: XCTestCase {
     func testResamplerRejectsAboveNyquist() {
         seiren_dsp_reset()
         let n = 4096
-        var x = (0..<n).map { Float(sin(2 * Double.pi * 30000.0 * Double($0) / 96000.0)) * 0.5 }
+        let x = (0..<n).map { Float(sin(2 * Double.pi * 30000.0 * Double($0) / 96000.0)) * 0.5 }
         var down = [Float](repeating: 0, count: n / 2)
         x.withUnsafeBufferPointer { ip in
             down.withUnsafeMutableBufferPointer { op in

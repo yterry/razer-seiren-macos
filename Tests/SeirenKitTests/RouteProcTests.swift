@@ -17,8 +17,8 @@ final class RouteProcTests: XCTestCase {
     private var allocations: [UnsafeMutablePointer<Float>] = []
     private var lists: [UnsafeMutableAudioBufferListPointer] = []
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         MonitorEngine.ensureScratch()
         // Pass-through DSP so the numbers are exact: no EQ, gate, or Studio.
         seiren_dsp_publish(nil, 0)
@@ -27,14 +27,14 @@ final class RouteProcTests: XCTestCase {
         seiren_dsp_reset()
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         gMonitorEnabled = true
         gMonitorOutBuffers = 1   // the V3 Pro default other code assumes
         for l in lists { l.unsafeMutablePointer.deallocate() }
         for p in allocations { p.deallocate() }
         lists = []
         allocations = []
-        super.tearDown()
+        try await super.tearDown()
     }
 
     /// `count` mono Float32 buffers of `frames` frames, each filled with `fill`.
