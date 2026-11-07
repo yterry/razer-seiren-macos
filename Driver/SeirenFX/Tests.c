@@ -71,6 +71,36 @@ static AudioObjectID checkStreams(AudioObjectID device, AudioObjectPropertyScope
     return stream;
 }
 
+// HAL quiesces only the endpoint that requests a rate change; the running peer
+// must keep the host time of its current period, ten minutes into a call.
+static void checkRateChangeKeepsPeerTimeline(AudioObjectID input, AudioObjectID feeder)
+{
+    SeirenFX_Loopback* loopback = SeirenFX_DeviceForObjectID(input)->loopback;
+    const Float64 rates[] = {44100, 96000, 88200, 48000};
+    for (UInt32 i = 0; i < 4; i++) {
+        AudioObjectID changing = i % 2 ? input : feeder, peer = i % 2 ? feeder : input;
+        UInt32 changingClient = changing == input ? 2 : 1, peerClient = peer == input ? 2 : 1;
+        loopback->numberTimeStamps = 439;
+        loopback->anchorHostTime = mach_absolute_time() - SeirenFX_PeriodHostOffset(loopback, 439);
+        Float64 sampleTime, changedSampleTime, rejoinedSampleTime;
+        UInt64 hostTime, changedHostTime, rejoinedHostTime, seed;
+        assert((*driver)->GetZeroTimeStamp(driver, peer, peerClient,
+            &sampleTime, &hostTime, &seed) == noErr);
+        assert((*driver)->StopIO(driver, changing, changingClient) == noErr);
+        changedCount = 0;
+        assert((*driver)->PerformDeviceConfigurationChange(driver, changing,
+            (UInt64)rates[i], NULL) == noErr);
+        assert((*driver)->GetZeroTimeStamp(driver, peer, peerClient,
+            &changedSampleTime, &changedHostTime, &seed) == noErr);
+        assert(changedSampleTime == sampleTime && changedHostTime == hostTime);
+        assert(changedHostTime <= mach_absolute_time());
+        assert((*driver)->StartIO(driver, changing, changingClient) == noErr);
+        assert((*driver)->GetZeroTimeStamp(driver, changing, changingClient,
+            &rejoinedSampleTime, &rejoinedHostTime, &seed) == noErr);
+        assert(rejoinedSampleTime == sampleTime && rejoinedHostTime == hostTime);
+    }
+}
+
 static void checkPair(CFStringRef inputUID, CFStringRef feederUID, Boolean inputFirst)
 {
     AudioObjectID input = deviceForUID(inputUID);
@@ -131,6 +161,7 @@ static void checkPair(CFStringRef inputUID, CFStringRef feederUID, Boolean input
     assert((*driver)->GetZeroTimeStamp(driver, input, 2,
         &inputSampleTime, &inputHostTime, &seed) == noErr);
     assert(inputSampleTime == sampleTime && inputHostTime == hostTime);
+    checkRateChangeKeepsPeerTimeline(input, feeder);
     for (int call = 0; call < 2; call++) {
         assert((*driver)->DoIOOperation(driver, input, inputStream, 2,
             kAudioServerPlugInIOOperationReadInput, 2, &cycle, received, NULL) == noErr);
@@ -150,6 +181,6 @@ int main(void)
         checkPair(CFSTR("SeirenFX:Device:0"), CFSTR("SeirenFX:Feeder:0"), inputFirst);
         checkPair(CFSTR("SeirenFX:StreamMix"), CFSTR("SeirenFX:StreamMix:Feeder"), inputFirst);
     }
-    puts("PASS: visible inputs have zero output streams/channels; hidden feeders share audio and clocks across calls");
+    puts("PASS: visible inputs have zero output streams/channels; hidden feeders share audio and clocks across calls and rate changes");
     return 0;
 }

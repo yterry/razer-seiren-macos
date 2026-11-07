@@ -159,6 +159,11 @@ static SeirenFX_Device gDevices[] = {
 };
 #define kNumDevices (sizeof(gDevices) / sizeof(gDevices[0]))
 
+static UInt64 SeirenFX_PeriodHostOffset(const SeirenFX_Loopback* loopback, UInt64 period)
+{
+    return (UInt64)(((Float64)period) * loopback->hostTicksPerFrame * (Float64)kRingFrames);
+}
+
 // Device and stream callbacks share the same state lookup; the plug-in has none.
 static SeirenFX_Device* SeirenFX_DeviceForObjectID(AudioObjectID inObjectID)
 {
@@ -356,11 +361,14 @@ static OSStatus SeirenFX_PerformDeviceConfigurationChange(AudioServerPlugInDrive
     if (!supported) return kAudioHardwareIllegalOperationError;
 
     pthread_mutex_lock(&gStateMutex);
-    device->loopback->sampleRate = newRate;
+    SeirenFX_Loopback* loopback = device->loopback;
+    UInt64 periodHostTime = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
+    loopback->sampleRate = newRate;
     struct mach_timebase_info tb;
     mach_timebase_info(&tb);
     Float64 hostTicksPerSecond = ((Float64)tb.denom / (Float64)tb.numer) * 1.0e9;
-    device->loopback->hostTicksPerFrame = hostTicksPerSecond / device->loopback->sampleRate;
+    loopback->hostTicksPerFrame = hostTicksPerSecond / loopback->sampleRate;
+    loopback->anchorHostTime = periodHostTime - SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
     pthread_mutex_unlock(&gStateMutex);
     // Both endpoints expose the same rate. Invalidate HAL's cached device and
     // stream formats for the whole pair when either endpoint changes it.
@@ -930,13 +938,12 @@ static OSStatus SeirenFX_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver, A
     if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
+    SeirenFX_Loopback* loopback = device->loopback;
     UInt64 currentHostTime = mach_absolute_time();
-    Float64 hostTicksPerRing = device->loopback->hostTicksPerFrame * (Float64)kRingFrames;
-    Float64 nextOffset = ((Float64)(device->loopback->numberTimeStamps + 1)) * hostTicksPerRing;
-    UInt64 nextHostTime = device->loopback->anchorHostTime + (UInt64)nextOffset;
-    if (currentHostTime >= nextHostTime) device->loopback->numberTimeStamps++;
-    *outSampleTime = (Float64)(device->loopback->numberTimeStamps * (UInt64)kRingFrames);
-    *outHostTime   = device->loopback->anchorHostTime + (UInt64)(((Float64)device->loopback->numberTimeStamps) * hostTicksPerRing);
+    UInt64 nextHostTime = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps + 1);
+    if (currentHostTime >= nextHostTime) loopback->numberTimeStamps++;
+    *outSampleTime = (Float64)(loopback->numberTimeStamps * (UInt64)kRingFrames);
+    *outHostTime   = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
     *outSeed       = 1;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;

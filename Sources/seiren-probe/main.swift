@@ -279,11 +279,6 @@ func runRoute(_ args: [String]) {
         print("Use either --device or --input."); exit(1)
     }
     let engine = MonitorEngine(deviceNameMatch: match, fallbackEnabled: !namedDevice)
-    if engine.fxNeedsReinstall {
-        print("Seiren FX needs a one-time reinstall to remove it from speaker lists.")
-        if engine.fxAvailable { print("Using the installed driver's output until then.") }
-        print("Run scripts/build-driver.sh and sudo scripts/install-driver.sh.")
-    }
     if let pinnedInput {
         let candidates = AudioDevices.candidates()
         let input = candidates.first { $0.uid == pinnedInput }
@@ -438,12 +433,6 @@ func runListen(_ args: [String]) {
         print("AudioDeviceCreateIOProcID failed: \(created)"); exit(1)
     }
     defer { AudioDeviceDestroyIOProcID(device.id, proc) }
-    let outputs = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeOutput)
-    if outputs > 0 {
-        let status = AudioDevices.setIOProcStreamUsage(device.id, proc: proc,
-            scope: kAudioObjectPropertyScopeOutput, enabled: [Bool](repeating: false, count: outputs))
-        guard status == noErr else { print("Cannot disable recorder outputs: \(status)"); exit(1) }
-    }
     let started = AudioDeviceStart(device.id, proc)
     guard started == noErr else {
         print("AudioDeviceStart failed: \(started)"); exit(1)
@@ -823,15 +812,6 @@ func runMix(_ args: [String]) {
         let created = AudioDeviceCreateIOProcID(mixDevice, listenIOProc, nil, &recorder)
         if created != noErr { print("Stream Mix recorder creation failed: \(created)") }
         if let recorder {
-            let outputs = AudioDevices.streamCount(mixDevice, scope: kAudioObjectPropertyScopeOutput)
-            if outputs > 0 {
-                let status = AudioDevices.setIOProcStreamUsage(mixDevice, proc: recorder,
-                    scope: kAudioObjectPropertyScopeOutput, enabled: [Bool](repeating: false, count: outputs))
-                guard status == noErr else {
-                    AudioDeviceDestroyIOProcID(mixDevice, recorder)
-                    print("Cannot disable Stream Mix recorder outputs: \(status)"); exit(1)
-                }
-            }
             let started = AudioDeviceStart(mixDevice, recorder)
             if started != noErr { print("Stream Mix recorder start failed: \(started)") }
         }
