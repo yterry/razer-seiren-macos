@@ -403,7 +403,7 @@ The mixer feeds the stream only.
 There is no Playback Mix: apps keep playing to the user's own output, because re-rendering all of their audio through this app would make it a single point of failure for everything they hear.
 
 **Engine.**
-`MixerEngine` owns one private aggregate: Seiren FX as the clock (the voice route sets its rate, the mixer never does), Seiren Stream Mix as a drift-compensated sub-device, and one Core Audio process tap per source (macOS 14.2+).
+`MixerEngine` owns one private aggregate: Seiren FX as the clock (the voice route sets its rate, the mixer never does), the hidden Seiren Stream Mix feeder (UID `SeirenFX:StreamMix:Feeder`, driver 3.0; the visible device on 2.0) as a drift-compensated sub-device, and one Core Audio process tap per source (macOS 14.2+).
 Voice is read back from Seiren FX's loopback input, so whatever feeds Seiren FX (the Seiren or the input fallback) is the voice.
 Desktop audio is a global tap that excludes this process, every process owned by an app channel, and every process recording Seiren Stream Mix (so a recorder that plays the mix back out cannot loop).
 An app channel is a mixdown tap of the processes whose outermost `.app` bundle is that app; WebKit's GPU / WebContent services count as Safari.

@@ -112,7 +112,7 @@ the same for the probe. `SEIREN_MONITOR_DEBUG=1` logs Auto-mode detection.
 
 ```sh
 swift build          # must succeed (CI pins a full Xcode toolchain)
-swift test           # must pass
+make test            # SeirenFX driver tests + swift test; must pass
 swift run seiren-mac # smoke-test the menu-bar app
 ```
 
@@ -122,7 +122,7 @@ Then:
 2. Open a PR using the template — describe what you tested and on which device
    (name + PID + macOS version + `swift --version`). Paste relevant `seiren-probe`
    output for device work.
-3. CI (`.github/workflows/ci.yml`, `macos-15`, `swift build` + `swift test`) must
+3. CI (`.github/workflows/ci.yml`, `macos-15`, `swift build`, `scripts/test-driver.sh`, `swift test`) must
    stay **green**. If it's red, it's not ready.
 
 Small, well-scoped PRs review fastest. Thank you.
