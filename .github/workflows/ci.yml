@@ -30,7 +30,9 @@ jobs:
         run: swift build
 
       - name: Test
-        run: swift test
+        run: |
+          bash scripts/test-driver.sh
+          swift test
 
   intel:
     name: Build, test & launch (Intel)
@@ -49,7 +51,9 @@ jobs:
         run: swift build
 
       - name: Test
-        run: swift test
+        run: |
+          bash scripts/test-driver.sh
+          swift test
 
       # Releases ship one universal app, so package it the same way and check
       # that it starts and stays up on an Intel Mac.

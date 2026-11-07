@@ -380,7 +380,11 @@ public final class MonitorEngine {
     /// True when a SeirenFX virtual device is installed, so EQ + broadcast to
     /// other apps are available. The UI uses this to explain the EQ is inert
     /// (or prompt to install the driver) when false.
-    public var fxAvailable: Bool { AudioDevices.fxDevice() != nil }
+    public var fxAvailable: Bool { AudioDevices.fxOutputDevice() != nil }
+
+    public var fxNeedsReinstall: Bool {
+        AudioDevices.fxDevice() != nil && AudioDevices.device(forUID: Self.fxFeederUID) == nil
+    }
 
     /// True when the live IOProc is routing through SeirenFX (vs the direct
     /// monitor fallback). EQ and broadcast are effective only when this is true.
@@ -592,6 +596,7 @@ public final class MonitorEngine {
         otherInputsSupported = AudioDevices.recordingProcessesSupported
         let candidates = AudioDevices.candidates()
         let fx = AudioDevices.fxDevice()
+        let fxOutput = AudioDevices.fxOutputDevice()
         let fxChanged = fx != observedFXDeviceID
         observedFXDeviceID = fx
         defer { if fxChanged { notify() } }
@@ -605,7 +610,7 @@ public final class MonitorEngine {
         let defaultUID = AudioDevices.defaultInputDevice().flatMap { AudioDevices.deviceUID($0) }
         let source = Self.selectSource(from: candidates, preference: inputPreference,
                                        defaultInputUID: defaultUID, match: deviceNameMatch,
-                                       fxInstalled: fx != nil && fallbackEnabled,
+                                       fxInstalled: fxOutput != nil && fallbackEnabled,
                                        otherInputsSupported: otherInputsSupported).flatMap {
             AudioDevices.isAlive($0.device.id) ? $0 : nil
         }
@@ -634,7 +639,7 @@ public final class MonitorEngine {
         } else {
             recording = []
         }
-        let decision = Self.runPolicy(mode: mode, source: source, fxInstalled: fx != nil,
+        let decision = Self.runPolicy(mode: mode, source: source, fxInstalled: fxOutput != nil,
                                       recordingDevices: recording, fxDeviceID: fx,
                                       streamMixDeviceID: streamMix,
                                       includeStreamMixInTriggers: includeStreamMixInTriggers)
@@ -649,14 +654,14 @@ public final class MonitorEngine {
             lastRecorderPresence = nil
         }
         let routeMatches = procID != nil && procSourceID == source?.device.id
-            && procSourceUID == source?.device.uid && procFXDeviceID == fx
+            && procSourceUID == source?.device.uid && procFXDeviceID == fxOutput
             && procDeviceID.map(AudioDevices.isAlive) == true
         let debounced = Self.debouncedRunDecision(
             decision: decision, current: state, recorderDriven: routeWasRecorderDriven, routeMatches: routeMatches,
             absenceSince: recorderAbsentSince, now: ProcessInfo.processInfo.systemUptime)
         recorderAbsentSince = debounced.absenceSince
         if debounced.state == .running, let source {
-            ensureRunning(on: source.device.id, fx: fx)
+            ensureRunning(on: source.device.id, fx: fxOutput)
             if decision == .running, procID != nil { routeWasRecorderDriven = dependsOnRecorders }
         } else {
             let reason: String
@@ -1197,6 +1202,8 @@ public final class MonitorEngine {
     /// Stable identity of the SeirenFX virtual device (see Driver/SeirenFX).
     nonisolated public static let fxDeviceUID = "SeirenFX:Device:0"
     nonisolated public static let streamMixDeviceUID = "SeirenFX:StreamMix"
+    nonisolated public static let fxFeederUID = "SeirenFX:Feeder:0"
+    nonisolated public static let streamMixFeederUID = "SeirenFX:StreamMix:Feeder"
     /// UID of our private aggregate. Private + destroyed on teardown, so a fixed
     /// UID is safe (and lets us recognise a leaked one in diagnostics).
     nonisolated public static let aggregateUID = "com.yterry.seiren-mac.route"
