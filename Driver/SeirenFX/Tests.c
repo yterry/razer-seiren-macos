@@ -1,7 +1,12 @@
 // Exercise the plug-in's public driver interface without installing it.
+// The host clock is replaced so tests can advance time deterministically.
+#define mach_absolute_time testHostTime
 #include "SeirenFX.c"
 #include <assert.h>
 #include <stdio.h>
+
+static UInt64 fakeHostTime = 1000000000000ull;
+uint64_t testHostTime(void) { return fakeHostTime; }
 
 static AudioServerPlugInDriverRef driver;
 static AudioObjectID changedObjects[4];
@@ -71,29 +76,52 @@ static AudioObjectID checkStreams(AudioObjectID device, AudioObjectPropertyScope
     return stream;
 }
 
-// HAL quiesces only the endpoint that requests a rate change; the running peer
-// must keep the host time of its current period, ten minutes into a call.
+// Move the fake clock just past the next zero timestamp and check that the
+// device's timeline advances by exactly one period at the given rate.
+static void advanceOnePeriod(AudioObjectID device, UInt32 client, Float64 rate,
+    Float64* sampleTime, UInt64* hostTime)
+{
+    UInt32 period = integerProperty(device, kAudioDevicePropertyZeroTimeStampPeriod,
+        kAudioObjectPropertyScopeGlobal);
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    Float64 ticks = (Float64)period / rate * 1.0e9 * timebase.denom / timebase.numer;
+    fakeHostTime = *hostTime + (UInt64)ticks + 3;
+    Float64 nextSampleTime;
+    UInt64 nextHostTime, seed;
+    assert((*driver)->GetZeroTimeStamp(driver, device, client,
+        &nextSampleTime, &nextHostTime, &seed) == noErr);
+    assert(nextSampleTime == *sampleTime + period);
+    Float64 drift = (Float64)nextHostTime - ((Float64)*hostTime + ticks);
+    assert(drift >= -2 && drift <= 2);
+    *sampleTime = nextSampleTime;
+    *hostTime = nextHostTime;
+}
+
+// HAL quiesces only the endpoint that requests a rate change; ten minutes into
+// a call, the running peer must keep its current period and advance at the new rate.
 static void checkRateChangeKeepsPeerTimeline(AudioObjectID input, AudioObjectID feeder)
 {
-    SeirenFX_Loopback* loopback = SeirenFX_DeviceForObjectID(input)->loopback;
+    Float64 sampleTime;
+    UInt64 hostTime, seed;
+    assert((*driver)->GetZeroTimeStamp(driver, input, 2, &sampleTime, &hostTime, &seed) == noErr);
+    for (int i = 0; i < 439; i++)
+        advanceOnePeriod(i % 2 ? feeder : input, i % 2 ? 1 : 2, 48000, &sampleTime, &hostTime);
+
     const Float64 rates[] = {44100, 96000, 88200, 48000};
     for (UInt32 i = 0; i < 4; i++) {
         AudioObjectID changing = i % 2 ? input : feeder, peer = i % 2 ? feeder : input;
         UInt32 changingClient = changing == input ? 2 : 1, peerClient = peer == input ? 2 : 1;
-        loopback->numberTimeStamps = 439;
-        loopback->anchorHostTime = mach_absolute_time() - SeirenFX_PeriodHostOffset(loopback, 439);
-        Float64 sampleTime, changedSampleTime, rejoinedSampleTime;
-        UInt64 hostTime, changedHostTime, rejoinedHostTime, seed;
-        assert((*driver)->GetZeroTimeStamp(driver, peer, peerClient,
-            &sampleTime, &hostTime, &seed) == noErr);
         assert((*driver)->StopIO(driver, changing, changingClient) == noErr);
         changedCount = 0;
         assert((*driver)->PerformDeviceConfigurationChange(driver, changing,
             (UInt64)rates[i], NULL) == noErr);
+        Float64 changedSampleTime, rejoinedSampleTime;
+        UInt64 changedHostTime, rejoinedHostTime;
         assert((*driver)->GetZeroTimeStamp(driver, peer, peerClient,
             &changedSampleTime, &changedHostTime, &seed) == noErr);
         assert(changedSampleTime == sampleTime && changedHostTime == hostTime);
-        assert(changedHostTime <= mach_absolute_time());
+        advanceOnePeriod(peer, peerClient, rates[i], &sampleTime, &hostTime);
         assert((*driver)->StartIO(driver, changing, changingClient) == noErr);
         assert((*driver)->GetZeroTimeStamp(driver, changing, changingClient,
             &rejoinedSampleTime, &rejoinedHostTime, &seed) == noErr);
