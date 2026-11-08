@@ -201,6 +201,11 @@ the EQ reaches other apps (OBS, Zoom, Discord, QuickTime…) only through a smal
 Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling app
 ```
 
+**Seiren FX and Seiren Stream Mix are microphones only.**
+They have no output channels and cannot appear as speakers in calling apps.
+The app sends audio through hidden output-only feeders that share each microphone's audio buffer and clock.
+Keep your speakers or headphones selected as the call's output.
+
 - **Your headphone monitor reflects the EQ** whenever you're monitoring through Seiren FX.
 - **Other apps hear the EQ only if you pick “Seiren FX” as their microphone.** If
   an app still points at “Razer Seiren V3 Pro” (or “V3 Mini”), it records the
@@ -221,6 +226,12 @@ Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling 
   scripts/build-driver.sh             # builds dist/SeirenFX.driver (clang, no Xcode)
   sudo scripts/install-driver.sh      # installs it + restarts coreaudiod (~1s glitch)
   ```
+
+**Upgrading an existing driver:** Seiren FX 3.0 removes the speaker outputs from both visible devices.
+The Voice menu says **Seiren FX needs a one-time reinstall** and offers **Reinstall Seiren FX…**, using the same admin prompt as installation.
+Processed voice continues through the old driver's output until you reinstall.
+Your saved Seiren FX and Seiren Stream Mix microphone choices keep working because their UIDs are unchanged.
+Source builds use the build and install commands above.
 
 It's an MIT-licensed CoreAudio plug-in (`AudioServerPlugIn`) — no kext, no
 entitlements. The copy bundled in releases is signed alongside the app; a local
@@ -275,10 +286,9 @@ headphones as usual, and the faders only shape what the stream gets.
 The mixer runs only while an app is recording Seiren Stream Mix, so macOS's
 audio-recording indicator is on only while you stream.
 
-- Needs **macOS 14.2** or later (it uses Core Audio process taps) and
-  **Seiren FX 2.0**, which adds the Seiren Stream Mix device.
-  If you installed Seiren FX with an older version of the app, the menu offers
-  **Update Seiren FX…** (one admin prompt).
+- Needs **macOS 14.2** or later (it uses Core Audio process taps) and **Seiren FX 3.0** for microphone-only devices.
+  If you installed an older driver, open **Voice ▸ Reinstall Seiren FX…** (one admin prompt).
+  The mixer continues to support the 2.0 driver while you arrange the reinstall.
 - The first time the mixer runs, macOS asks to let Seiren record your computer's
   audio.
   If you decline, the app channels and Desktop audio stay silent.
@@ -316,6 +326,7 @@ hardware forgets its lighting state on unplug.
 
 ```sh
 swift test                         # unit tests (SeirenKit)
+bash scripts/test-driver.sh        # SeirenFX driver tests (make test runs both)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls
 swift run seiren-probe route       # run the real engine for 5 s, report what the RT proc saw

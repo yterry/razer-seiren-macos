@@ -6,17 +6,11 @@
 //
 //  WHAT THIS IS
 //  ------------
-//  A HAL "AudioServerPlugIn" that publishes two virtual devices, each with a
-//  stereo input stream and a stereo output stream wired together as a
-//  loopback: whatever an app *plays* to the output appears on the input for
-//  other apps to *record*. The seiren-mac menu-bar app reads the real Razer
-//  Seiren microphone, applies DSP (EQ, noise suppression), and plays the
-//  processed audio into "Seiren FX"'s output; Zoom / Discord select
-//  "Seiren FX" as their input and therefore record the processed voice.
-//
-//  "Seiren Stream Mix" carries the processed voice mixed with other apps'
-//  audio by the menu-bar app. OBS records its input for streaming, while
-//  "Seiren FX" remains voice-only. Each device has its own loopback and clock.
+//  A HAL "AudioServerPlugIn" that publishes two input-only microphones:
+//  "Seiren FX" for processed voice and "Seiren Stream Mix" for voice + apps.
+//  Each has a hidden output-only feeder sharing its loopback ring and clock.
+//  The menu-bar app writes to the feeders; calling/recording apps read the
+//  visible microphones. Neither microphone can appear in a speaker picker.
 //
 //  This is the only way to make our software DSP reach *other apps* on macOS
 //  (CoreAudio gives apps the raw hardware mic directly; there is no system
@@ -31,15 +25,13 @@
 //  stay MIT. The loopback ring-buffer technique is the obvious implementation of
 //  the public DoIOOperation contract.
 //
-//  OBJECT MODEL (no Box - both devices are always published)
-//  ------------------------------------------------------
-//    kObjectID_PlugIn (1)
-//      ├─ kObjectID_Device (2)                  "Seiren FX"
-//      │    ├─ kObjectID_Stream_Input (3)         (voice recording)
-//      │    └─ kObjectID_Stream_Output (4)        (processed voice)
-//      └─ kObjectID_StreamMix_Device (5)         "Seiren Stream Mix"
-//           ├─ kObjectID_StreamMix_Input (6)      (stream recording)
-//           └─ kObjectID_StreamMix_Output (7)     (voice + other apps)
+//  OBJECT MODEL (no Box - all devices are always published to the HAL)
+//  ------------------------------------------------------------------
+//    PlugIn (1)
+//      Device (2) "Seiren FX"              -> Input (3)
+//      Device (5) "Seiren Stream Mix"      -> Input (6)
+//      Feeder (8), hidden                  -> Output (4), shares Device (2)
+//      Stream Mix Feeder (9), hidden       -> Output (7), shares Device (5)
 //
 //  Audio format: interleaved stereo Float32, default 48 kHz.
 //
@@ -64,6 +56,8 @@
 #define kStreamMix_Name         "Seiren Stream Mix"
 #define kStreamMix_UID          "SeirenFX:StreamMix"
 #define kStreamMix_ModelUID     "SeirenFX:StreamMix:Model"
+#define kFeeder_UID             "SeirenFX:Feeder:0"
+#define kStreamMix_FeederUID    "SeirenFX:StreamMix:Feeder"
 
 #define kChannelsPerFrame       2u
 #define kBitsPerChannel         32u
@@ -80,7 +74,9 @@ enum {
     kObjectID_Stream_Output    = 4,
     kObjectID_StreamMix_Device = 5,
     kObjectID_StreamMix_Input  = 6,
-    kObjectID_StreamMix_Output = 7
+    kObjectID_StreamMix_Output = 7,
+    kObjectID_Feeder           = 8,
+    kObjectID_StreamMix_Feeder = 9
 };
 
 // The set of sample rates we advertise. Default is 48 kHz (the Seiren's rate).
@@ -94,6 +90,22 @@ static pthread_mutex_t          gStateMutex  = PTHREAD_MUTEX_INITIALIZER;
 
 static UInt32   gPlugIn_RefCount  = 0;
 
+// One timeline and ring per input/feeder pair. Starting another endpoint must
+// not reset an active pair, including when a meeting stops and starts again.
+typedef struct {
+    Float64 sampleRate;
+    UInt32 ioRunningCount;
+    Float64 hostTicksPerFrame;
+    UInt64 anchorHostTime;
+    volatile UInt64 numberTimeStamps;
+    Float32* ring;
+} SeirenFX_Loopback;
+
+static SeirenFX_Loopback gLoopbacks[] = {
+    { .sampleRate = 48000.0 },
+    { .sampleRate = 48000.0 }
+};
+
 typedef struct {
     AudioObjectID deviceID;
     AudioObjectID inputStreamID;
@@ -101,50 +113,61 @@ typedef struct {
     CFStringRef name;
     CFStringRef uid;
     CFStringRef modelUID;
-
-    Float64 sampleRate;
-    UInt32 ioRunningCount;   // how many clients have StartIO'd
+    SeirenFX_Loopback* loopback;
+    UInt32 ioRunningCount;
     Boolean inputIsActive;
     Boolean outputIsActive;
-
-    // Zero-timestamp bookkeeping.
-    Float64 hostTicksPerFrame;
-    UInt64 anchorHostTime;
-    volatile UInt64 numberTimeStamps;
-
-    // Interleaved Float32, kRingFrames * kChannelsPerFrame.
-    Float32* ring;
 } SeirenFX_Device;
 
 static SeirenFX_Device gDevices[] = {
     {
         .deviceID = kObjectID_Device,
         .inputStreamID = kObjectID_Stream_Input,
-        .outputStreamID = kObjectID_Stream_Output,
         .name = CFSTR(kDevice_Name),
         .uid = CFSTR(kDevice_UID),
         .modelUID = CFSTR(kDevice_ModelUID),
-        .sampleRate = 48000.0,
-        .inputIsActive = true,
-        .outputIsActive = true
+        .loopback = &gLoopbacks[0],
+        .inputIsActive = true
     },
     {
         .deviceID = kObjectID_StreamMix_Device,
         .inputStreamID = kObjectID_StreamMix_Input,
-        .outputStreamID = kObjectID_StreamMix_Output,
         .name = CFSTR(kStreamMix_Name),
         .uid = CFSTR(kStreamMix_UID),
         .modelUID = CFSTR(kStreamMix_ModelUID),
-        .sampleRate = 48000.0,
-        .inputIsActive = true,
+        .loopback = &gLoopbacks[1],
+        .inputIsActive = true
+    },
+    {
+        .deviceID = kObjectID_Feeder,
+        .outputStreamID = kObjectID_Stream_Output,
+        .name = CFSTR("Seiren FX Feeder"),
+        .uid = CFSTR(kFeeder_UID),
+        .modelUID = CFSTR(kDevice_ModelUID),
+        .loopback = &gLoopbacks[0],
+        .outputIsActive = true
+    },
+    {
+        .deviceID = kObjectID_StreamMix_Feeder,
+        .outputStreamID = kObjectID_StreamMix_Output,
+        .name = CFSTR("Seiren Stream Mix Feeder"),
+        .uid = CFSTR(kStreamMix_FeederUID),
+        .modelUID = CFSTR(kStreamMix_ModelUID),
+        .loopback = &gLoopbacks[1],
         .outputIsActive = true
     }
 };
 #define kNumDevices (sizeof(gDevices) / sizeof(gDevices[0]))
 
+static UInt64 SeirenFX_PeriodHostOffset(const SeirenFX_Loopback* loopback, UInt64 period)
+{
+    return (UInt64)(((Float64)period) * loopback->hostTicksPerFrame * (Float64)kRingFrames);
+}
+
 // Device and stream callbacks share the same state lookup; the plug-in has none.
 static SeirenFX_Device* SeirenFX_DeviceForObjectID(AudioObjectID inObjectID)
 {
+    if (inObjectID == kAudioObjectUnknown) return NULL;
     for (UInt32 i = 0; i < kNumDevices; i++) {
         SeirenFX_Device* device = &gDevices[i];
         if (inObjectID == device->deviceID || inObjectID == device->inputStreamID || inObjectID == device->outputStreamID)
@@ -274,12 +297,12 @@ static OSStatus SeirenFX_Initialize(AudioServerPlugInDriverRef inDriver, AudioSe
     pthread_mutex_lock(&gStateMutex);
     for (UInt32 i = 0; i < kNumDevices; i++) {
         SeirenFX_Device* device = &gDevices[i];
-        device->hostTicksPerFrame = hostTicksPerSecond / device->sampleRate;
+        device->loopback->hostTicksPerFrame = hostTicksPerSecond / device->loopback->sampleRate;
 
         // Allocate (and clear) each loopback ring once.
-        if (device->ring == NULL) {
-            device->ring = (Float32*)calloc((size_t)kRingFrames * kChannelsPerFrame, sizeof(Float32));
-            if (device->ring == NULL) {
+        if (device->loopback->ring == NULL) {
+            device->loopback->ring = (Float32*)calloc((size_t)kRingFrames * kChannelsPerFrame, sizeof(Float32));
+            if (device->loopback->ring == NULL) {
                 pthread_mutex_unlock(&gStateMutex);
                 return kAudioHardwareUnspecifiedError;
             }
@@ -338,12 +361,32 @@ static OSStatus SeirenFX_PerformDeviceConfigurationChange(AudioServerPlugInDrive
     if (!supported) return kAudioHardwareIllegalOperationError;
 
     pthread_mutex_lock(&gStateMutex);
-    device->sampleRate = newRate;
+    SeirenFX_Loopback* loopback = device->loopback;
+    UInt64 periodHostTime = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
+    loopback->sampleRate = newRate;
     struct mach_timebase_info tb;
     mach_timebase_info(&tb);
     Float64 hostTicksPerSecond = ((Float64)tb.denom / (Float64)tb.numer) * 1.0e9;
-    device->hostTicksPerFrame = hostTicksPerSecond / device->sampleRate;
+    loopback->hostTicksPerFrame = hostTicksPerSecond / loopback->sampleRate;
+    loopback->anchorHostTime = periodHostTime - SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
     pthread_mutex_unlock(&gStateMutex);
+    // Both endpoints expose the same rate. Invalidate HAL's cached device and
+    // stream formats for the whole pair when either endpoint changes it.
+    if (gPlugIn_Host != NULL) {
+        AudioObjectPropertyAddress rate = { kAudioDevicePropertyNominalSampleRate,
+            kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        AudioObjectPropertyAddress formats[] = {
+            { kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain },
+            { kAudioStreamPropertyPhysicalFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain }
+        };
+        for (UInt32 i = 0; i < kNumDevices; i++) {
+            SeirenFX_Device* endpoint = &gDevices[i];
+            if (endpoint->loopback != device->loopback) continue;
+            gPlugIn_Host->PropertiesChanged(gPlugIn_Host, endpoint->deviceID, 1, &rate);
+            AudioObjectID stream = endpoint->inputStreamID ? endpoint->inputStreamID : endpoint->outputStreamID;
+            gPlugIn_Host->PropertiesChanged(gPlugIn_Host, stream, 2, formats);
+        }
+    }
     return noErr;
 }
 
@@ -400,6 +443,8 @@ static Boolean SeirenFX_HasProperty(AudioServerPlugInDriverRef inDriver, AudioOb
 
         case kObjectID_Device:
         case kObjectID_StreamMix_Device:
+        case kObjectID_Feeder:
+        case kObjectID_StreamMix_Feeder:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:
                 case kAudioObjectPropertyClass:
@@ -467,6 +512,8 @@ static OSStatus SeirenFX_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
     switch (inObjectID) {
         case kObjectID_Device:
         case kObjectID_StreamMix_Device:
+        case kObjectID_Feeder:
+        case kObjectID_StreamMix_Feeder:
             if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) *outIsSettable = true;
             break;
         case kObjectID_StreamMix_Input:
@@ -492,6 +539,7 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
     (void)inClientPID; (void)inQualifierDataSize; (void)inQualifierData;
     if (inDriver != gDriverRef || inAddress == NULL || outDataSize == NULL) return kAudioHardwareIllegalOperationError;
 
+    SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inObjectID);
     switch (inObjectID) {
         case kObjectID_PlugIn:
             switch (inAddress->mSelector) {
@@ -510,6 +558,8 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
 
         case kObjectID_Device:
         case kObjectID_StreamMix_Device:
+        case kObjectID_Feeder:
+        case kObjectID_StreamMix_Feeder:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:               *outDataSize = sizeof(AudioClassID); return noErr;
                 case kAudioObjectPropertyClass:                   *outDataSize = sizeof(AudioClassID); return noErr;
@@ -518,11 +568,12 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
                 case kAudioObjectPropertyManufacturer:            *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioObjectPropertyOwnedObjects:
                     // Streams owned by the device, filtered by scope.
-                    switch (inAddress->mScope) {
-                        case kAudioObjectPropertyScopeInput:  *outDataSize = 1 * sizeof(AudioObjectID); return noErr;
-                        case kAudioObjectPropertyScopeOutput: *outDataSize = 1 * sizeof(AudioObjectID); return noErr;
-                        default:                              *outDataSize = 2 * sizeof(AudioObjectID); return noErr;
-                    }
+                    *outDataSize = 0;
+                    if (device->inputStreamID && inAddress->mScope != kAudioObjectPropertyScopeOutput)
+                        *outDataSize += sizeof(AudioObjectID);
+                    if (device->outputStreamID && inAddress->mScope != kAudioObjectPropertyScopeInput)
+                        *outDataSize += sizeof(AudioObjectID);
+                    return noErr;
                 case kAudioDevicePropertyDeviceUID:               *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioDevicePropertyModelUID:                *outDataSize = sizeof(CFStringRef); return noErr;
                 case kAudioDevicePropertyTransportType:           *outDataSize = sizeof(UInt32); return noErr;
@@ -534,11 +585,12 @@ static OSStatus SeirenFX_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver
                 case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:  *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyLatency:                 *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyStreams:
-                    switch (inAddress->mScope) {
-                        case kAudioObjectPropertyScopeInput:  *outDataSize = 1 * sizeof(AudioObjectID); return noErr;
-                        case kAudioObjectPropertyScopeOutput: *outDataSize = 1 * sizeof(AudioObjectID); return noErr;
-                        default:                              *outDataSize = 2 * sizeof(AudioObjectID); return noErr;
-                    }
+                    *outDataSize = 0;
+                    if (device->inputStreamID && inAddress->mScope != kAudioObjectPropertyScopeOutput)
+                        *outDataSize += sizeof(AudioObjectID);
+                    if (device->outputStreamID && inAddress->mScope != kAudioObjectPropertyScopeInput)
+                        *outDataSize += sizeof(AudioObjectID);
+                    return noErr;
                 case kAudioObjectPropertyControlList:             *outDataSize = 0; return noErr; // no controls
                 case kAudioDevicePropertySafetyOffset:           *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyNominalSampleRate:       *outDataSize = sizeof(Float64); return noErr;
@@ -625,6 +677,8 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
 
         case kObjectID_Device:
         case kObjectID_StreamMix_Device:
+        case kObjectID_Feeder:
+        case kObjectID_StreamMix_Feeder:
             switch (inAddress->mSelector) {
                 case kAudioObjectPropertyBaseClass:
                     *((AudioClassID*)outData) = kAudioObjectClassID; *outDataSize = sizeof(AudioClassID); return noErr;
@@ -641,9 +695,9 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     AudioObjectID* list = (AudioObjectID*)outData;
                     UInt32 max = inDataSize / sizeof(AudioObjectID);
                     UInt32 n = 0;
-                    if ((inAddress->mScope == kAudioObjectPropertyScopeInput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
+                    if (device->inputStreamID && (inAddress->mScope == kAudioObjectPropertyScopeInput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
                         list[n++] = device->inputStreamID;
-                    if ((inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
+                    if (device->outputStreamID && (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) && n < max)
                         list[n++] = device->outputStreamID;
                     *outDataSize = n * sizeof(AudioObjectID); return noErr;
                 }
@@ -659,7 +713,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     } else { *outDataSize = 0; }
                     return noErr;
                 case kAudioDevicePropertyClockDomain:
-                    *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
+                    *((UInt32*)outData) = 0x53465830u + (UInt32)(device->loopback - gLoopbacks); *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyDeviceIsAlive:
                     *((UInt32*)outData) = 1; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyDeviceIsRunning: {
@@ -670,7 +724,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                 }
                 case kAudioDevicePropertyDeviceCanBeDefaultDevice:
                     // Global uses the input answer; loopbacks must not be default speakers.
-                    *((UInt32*)outData) = (inAddress->mScope == kAudioObjectPropertyScopeInput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) ? 1 : 0; *outDataSize = sizeof(UInt32); return noErr;
+                    *((UInt32*)outData) = (device->inputStreamID && inAddress->mScope != kAudioObjectPropertyScopeOutput) ? 1 : 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
                     *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyLatency:
@@ -681,7 +735,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyNominalSampleRate: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((Float64*)outData) = device->sampleRate;
+                    *((Float64*)outData) = device->loopback->sampleRate;
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(Float64); return noErr;
                 }
@@ -697,7 +751,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                     *outDataSize = n * sizeof(AudioValueRange); return noErr;
                 }
                 case kAudioDevicePropertyIsHidden:
-                    *((UInt32*)outData) = 0; *outDataSize = sizeof(UInt32); return noErr;
+                    *((UInt32*)outData) = device->outputStreamID ? 1 : 0; *outDataSize = sizeof(UInt32); return noErr;
                 case kAudioDevicePropertyPreferredChannelsForStereo: {
                     UInt32* chans = (UInt32*)outData;
                     chans[0] = 1; chans[1] = 2; *outDataSize = 2 * sizeof(UInt32); return noErr;
@@ -747,7 +801,7 @@ static OSStatus SeirenFX_GetPropertyData(AudioServerPlugInDriverRef inDriver, Au
                 case kAudioStreamPropertyVirtualFormat:
                 case kAudioStreamPropertyPhysicalFormat: {
                     pthread_mutex_lock(&gStateMutex);
-                    *((AudioStreamBasicDescription*)outData) = SeirenFX_MakeFormat(device->sampleRate);
+                    *((AudioStreamBasicDescription*)outData) = SeirenFX_MakeFormat(device->loopback->sampleRate);
                     pthread_mutex_unlock(&gStateMutex);
                     *outDataSize = sizeof(AudioStreamBasicDescription); return noErr;
                 }
@@ -782,6 +836,8 @@ static OSStatus SeirenFX_SetPropertyData(AudioServerPlugInDriverRef inDriver, Au
     switch (inObjectID) {
         case kObjectID_Device:
         case kObjectID_StreamMix_Device:
+        case kObjectID_Feeder:
+        case kObjectID_StreamMix_Feeder:
             if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) {
                 if (inDataSize < sizeof(Float64)) return kAudioHardwareBadPropertySizeError;
                 Float64 requested = *((const Float64*)inData);
@@ -792,7 +848,7 @@ static OSStatus SeirenFX_SetPropertyData(AudioServerPlugInDriverRef inDriver, Au
 
                 Boolean changed;
                 pthread_mutex_lock(&gStateMutex);
-                changed = (requested != device->sampleRate);
+                changed = (requested != device->loopback->sampleRate);
                 pthread_mutex_unlock(&gStateMutex);
                 // Apply asynchronously through the host so the HAL can quiesce IO.
                 if (changed && gPlugIn_Host != NULL)
@@ -845,14 +901,15 @@ static OSStatus SeirenFX_StartIO(AudioServerPlugInDriverRef inDriver, AudioObjec
     if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
-    if (device->ioRunningCount == 0) {
+    if (device->loopback->ioRunningCount == 0) {
         // First client: reset the timeline and clear stale loopback audio.
-        device->numberTimeStamps = 0;
-        device->anchorHostTime = mach_absolute_time();
-        if (device->ring != NULL)
-            memset(device->ring, 0, (size_t)kRingFrames * kChannelsPerFrame * sizeof(Float32));
+        device->loopback->numberTimeStamps = 0;
+        device->loopback->anchorHostTime = mach_absolute_time();
+        if (device->loopback->ring != NULL)
+            memset(device->loopback->ring, 0, (size_t)kRingFrames * kChannelsPerFrame * sizeof(Float32));
     }
     device->ioRunningCount++;
+    device->loopback->ioRunningCount++;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
@@ -865,7 +922,10 @@ static OSStatus SeirenFX_StopIO(AudioServerPlugInDriverRef inDriver, AudioObject
     if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
-    if (device->ioRunningCount > 0) device->ioRunningCount--;
+    if (device->ioRunningCount > 0) {
+        device->ioRunningCount--;
+        device->loopback->ioRunningCount--;
+    }
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
 }
@@ -878,13 +938,12 @@ static OSStatus SeirenFX_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver, A
     if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
 
     pthread_mutex_lock(&gStateMutex);
+    SeirenFX_Loopback* loopback = device->loopback;
     UInt64 currentHostTime = mach_absolute_time();
-    Float64 hostTicksPerRing = device->hostTicksPerFrame * (Float64)kRingFrames;
-    Float64 nextOffset = ((Float64)(device->numberTimeStamps + 1)) * hostTicksPerRing;
-    UInt64 nextHostTime = device->anchorHostTime + (UInt64)nextOffset;
-    if (currentHostTime >= nextHostTime) device->numberTimeStamps++;
-    *outSampleTime = (Float64)(device->numberTimeStamps * (UInt64)kRingFrames);
-    *outHostTime   = device->anchorHostTime + (UInt64)(((Float64)device->numberTimeStamps) * hostTicksPerRing);
+    UInt64 nextHostTime = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps + 1);
+    if (currentHostTime >= nextHostTime) loopback->numberTimeStamps++;
+    *outSampleTime = (Float64)(loopback->numberTimeStamps * (UInt64)kRingFrames);
+    *outHostTime   = loopback->anchorHostTime + SeirenFX_PeriodHostOffset(loopback, loopback->numberTimeStamps);
     *outSeed       = 1;
     pthread_mutex_unlock(&gStateMutex);
     return noErr;
@@ -900,8 +959,9 @@ static OSStatus SeirenFX_WillDoIOOperation(AudioServerPlugInDriverRef inDriver, 
     Boolean willDo = false, inPlace = true;
     switch (inOperationID) {
         case kAudioServerPlugInIOOperationReadInput:
+            willDo = device->inputStreamID != 0; break;
         case kAudioServerPlugInIOOperationWriteMix:
-            willDo = true; inPlace = true; break;
+            willDo = device->outputStreamID != 0; break;
     }
     if (outWillDo)        *outWillDo = willDo;
     if (outWillDoInPlace) *outWillDoInPlace = inPlace;
@@ -923,26 +983,27 @@ static OSStatus SeirenFX_DoIOOperation(AudioServerPlugInDriverRef inDriver, Audi
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
     SeirenFX_Device* device = SeirenFX_DeviceForObjectID(inDeviceObjectID);
     if (device == NULL || inDeviceObjectID != device->deviceID) return kAudioHardwareBadObjectError;
+    if (inStreamObjectID == kAudioObjectUnknown) return kAudioHardwareBadObjectError;
     if (inStreamObjectID != device->inputStreamID && inStreamObjectID != device->outputStreamID) return kAudioHardwareBadObjectError;
-    if (device->ring == NULL || ioMainBuffer == NULL) return noErr;
+    if (device->loopback->ring == NULL || ioMainBuffer == NULL) return noErr;
 
     Float32* buffer = (Float32*)ioMainBuffer;
 
-    if (inOperationID == kAudioServerPlugInIOOperationWriteMix) {
+    if (inOperationID == kAudioServerPlugInIOOperationWriteMix && inStreamObjectID == device->outputStreamID) {
         // App played audio → store it in the ring at the output sample time.
         Float64 startTime = inIOCycleInfo->mOutputTime.mSampleTime;
         for (UInt32 f = 0; f < inIOBufferFrameSize; f++) {
             UInt64 idx = ((UInt64)(startTime + (Float64)f)) % (UInt64)kRingFrames;
-            Float32* dst = &device->ring[idx * kChannelsPerFrame];
+            Float32* dst = &device->loopback->ring[idx * kChannelsPerFrame];
             const Float32* src = &buffer[(size_t)f * kChannelsPerFrame];
             for (UInt32 c = 0; c < kChannelsPerFrame; c++) dst[c] = src[c];
         }
-    } else if (inOperationID == kAudioServerPlugInIOOperationReadInput) {
+    } else if (inOperationID == kAudioServerPlugInIOOperationReadInput && inStreamObjectID == device->inputStreamID) {
         // Other app recording → serve it the ring at the input sample time.
         Float64 startTime = inIOCycleInfo->mInputTime.mSampleTime;
         for (UInt32 f = 0; f < inIOBufferFrameSize; f++) {
             UInt64 idx = ((UInt64)(startTime + (Float64)f)) % (UInt64)kRingFrames;
-            const Float32* src = &device->ring[idx * kChannelsPerFrame];
+            const Float32* src = &device->loopback->ring[idx * kChannelsPerFrame];
             Float32* dst = &buffer[(size_t)f * kChannelsPerFrame];
             for (UInt32 c = 0; c < kChannelsPerFrame; c++) dst[c] = src[c];
         }

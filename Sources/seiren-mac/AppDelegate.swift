@@ -331,13 +331,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         let fxAvailable = engine.fxAvailable
         let updateAvailable = DriverInstaller.updateAvailable
-        if updateAvailable {
-            let update = NSMenuItem(title: "Update Seiren FX…",
+        let needsReinstall = engine.fxNeedsReinstall
+        if needsReinstall {
+            submenu.addItem(disabledItem("Seiren FX needs a one-time reinstall"))
+        }
+        if DriverInstaller.isBundled && (updateAvailable || needsReinstall) {
+            let update = NSMenuItem(title: needsReinstall ? "Reinstall Seiren FX…" : "Update Seiren FX…",
                                     action: #selector(installDriver), keyEquivalent: "")
             update.target = self
             submenu.addItem(update)
-            submenu.addItem(disabledItem("A newer Seiren FX comes with this app"))
+            submenu.addItem(disabledItem(needsReinstall
+                ? "Removes Seiren FX from speaker lists" : "A newer Seiren FX comes with this app"))
             if fxAvailable { submenu.addItem(.separator()) }
+        } else if needsReinstall {
+            submenu.addItem(disabledItem("Run scripts/build-driver.sh"))
+            submenu.addItem(disabledItem("then sudo scripts/install-driver.sh"))
         }
 
         if !fxAvailable {

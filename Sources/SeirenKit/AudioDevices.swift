@@ -67,6 +67,32 @@ package enum AudioDevices {
         allDevices().first { deviceUID($0) == MonitorEngine.streamMixDeviceUID }
     }
 
+    /// Hidden devices are absent from allDevices(); resolve their stable UID through HAL.
+    package static func device(forUID uid: String) -> AudioObjectID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var qualifier = uid as CFString
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = withUnsafePointer(to: &qualifier) { pointer in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                UInt32(MemoryLayout<CFString>.size), pointer, &size, &device)
+        }
+        guard status == noErr,
+            device != kAudioObjectUnknown else { return nil }
+        return device
+    }
+
+    package static func fxOutputDevice() -> AudioObjectID? {
+        device(forUID: MonitorEngine.fxFeederUID)
+            ?? fxDevice().flatMap { hasStreams($0, scope: kAudioObjectPropertyScopeOutput) ? $0 : nil }
+    }
+
+    package static func streamMixOutputDevice() -> AudioObjectID? {
+        device(forUID: MonitorEngine.streamMixFeederUID)
+            ?? streamMixDevice().flatMap { hasStreams($0, scope: kAudioObjectPropertyScopeOutput) ? $0 : nil }
+    }
+
     package static func processObjects() -> [AudioObjectID] {
         let sys = AudioObjectID(kAudioObjectSystemObject)
         var addr = processListAddress

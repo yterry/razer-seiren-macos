@@ -6,6 +6,7 @@ build:
 	swift build -c release
 
 test:
+	bash scripts/test-driver.sh
 	swift test
 
 ## app: assemble dist/Seiren.app (+ zip + sha256). Ad-hoc signed unless SIGN_ID set.

@@ -159,7 +159,7 @@ public final class MixerEngine {
     public var availability: State {
         Self.runPolicy(enabled: true, supportedOS: Self.supportedOS,
                        hasFX: AudioDevices.fxDevice() != nil,
-                       hasStreamMix: AudioDevices.streamMixDevice() != nil, hasRecorders: false)
+                       hasStreamMix: AudioDevices.streamMixOutputDevice() != nil, hasRecorders: false)
     }
 
     public var diagnostics: Diagnostics {
@@ -316,6 +316,7 @@ public final class MixerEngine {
     private func reconcile() {
         guard !isShutdown else { return }
         let fx = AudioDevices.fxDevice(), mix = AudioDevices.streamMixDevice()
+        let mixOutput = AudioDevices.streamMixOutputDevice()
         let devicesChanged = fx != fxObserved || mix != mixObserved
         if devicesChanged {
             updateDeviceListeners(fx: fx, mix: mix)
@@ -326,9 +327,9 @@ public final class MixerEngine {
             !Self.shouldIgnoreRecorder(bundleID: $0.bundleID, appBundleID: Bundle.main.bundleIdentifier)
         }
         let desired = Self.runPolicy(enabled: isEnabled, supportedOS: Self.supportedOS,
-            hasFX: fx != nil, hasStreamMix: mix != nil,
+            hasFX: fx != nil, hasStreamMix: mixOutput != nil,
             hasRecorders: runWithoutRecorder || !recorders.isEmpty)
-        guard desired == .running, let fx, let mix else {
+        guard desired == .running, let fx, let mixOutput else {
             teardown(); snapshot = nil; state = desired
             return
         }
@@ -362,7 +363,7 @@ public final class MixerEngine {
         }
         let recorderObjects = Set(recorders.map(\.objectID))
         let appProcesses = Self.channelProcesses(bundleIDs: appBundleIDs, byApp: byApp, excluding: recorderObjects)
-        let current = Snapshot(fx: fx, mix: mix, rate: AudioDevices.nominalRate(fx), appBundleIDs: appBundleIDs,
+        let current = Snapshot(fx: fx, mix: mixOutput, rate: AudioDevices.nominalRate(fx), appBundleIDs: appBundleIDs,
             apps: appProcesses, recorders: recorderObjects, ownProcess: ownProcess)
         // A coreaudiod restart can hand out the same IDs, so "running with the
         // same inputs" only counts while our aggregate still exists.
@@ -405,7 +406,8 @@ public final class MixerEngine {
                             kAudioSubTapDriftCompensationKey as String: 1])
             tapDiagnostics.append(Tap(channelName: channels[channel].name, processCount: count))
         }
-        let fxUID = MonitorEngine.fxDeviceUID, mixUID = MonitorEngine.streamMixDeviceUID
+        guard let fxUID = AudioDevices.deviceUID(current.fx),
+              let mixUID = AudioDevices.deviceUID(current.mix) else { return kAudioHardwareBadObjectError }
         let description: [String: Any] = [
             kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
             kAudioAggregateDeviceNameKey as String: "Seiren Mixer",
