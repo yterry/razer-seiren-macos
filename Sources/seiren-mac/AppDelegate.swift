@@ -20,7 +20,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
     /// to exercise the menu without the hardware. Not a user setting.
     private let engine = MonitorEngine(
-        deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren")
+        deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren",
+        microphoneAccess: {
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: return .granted
+            case .denied, .restricted: return .denied
+            case .notDetermined: return .undetermined
+            @unknown default: return .undetermined
+            }
+        })
     private let mixer = MixerEngine()
     private let lighting = LightingController()
     private let settings = Settings()
@@ -111,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         if restored == .off {
             engine.setMode(.off)
         } else {
-            requestMicrophoneAccessThen { [weak self] in self?.engine.setMode(restored) }
+            Self.requestMicrophoneAccessThen { [weak self] in self?.engine.setMode(restored) }
         }
     }
 
@@ -157,6 +165,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         if menu === mixerMenu { populateMixerMenu(menu) }
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem.menu, engine.mode != .off else { return }
+        // System Settings can change authorization while the app stays open.
+        // Reconcile and populate the opening menu itself before it is displayed.
+        engine.setMode(engine.mode)
+        rebuildMenu(menu)
+        configureStatusButtonImage()
+    }
+
     // MARK: - LightingControllerDelegate
 
     nonisolated func lightingControllerDidChange(_ controller: LightingController) {
@@ -181,8 +198,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     // MARK: - Menu construction
 
-    private func rebuildMenu() {
-        let menu = NSMenu()
+    private func rebuildMenu(_ menu: NSMenu = NSMenu()) {
+        menu.removeAllItems()
+        menu.delegate = self
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
@@ -779,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             rebuildMenu()
         } else {
             // Both always/auto read the mic → ensure permission, then apply.
-            requestMicrophoneAccessThen { [weak self] in
+            Self.requestMicrophoneAccessThen { [weak self] in
                 guard let self else { return }
                 self.engine.setMode(mode)
                 self.rebuildMenu()
@@ -936,23 +954,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     // MARK: - Microphone permission
 
-    /// Ensure the prompt has been shown and run `onGranted` if access is (or
-    /// becomes) authorized. On denial we still call through so the engine can
+    /// Ensure the prompt has been shown, then apply the chosen mode.
+    /// On denial we still call through so the engine can
     /// surface `.permissionDenied` with the Settings shortcut.
-    private func requestMicrophoneAccessThen(_ onGranted: @escaping @MainActor () -> Void) {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    static func requestMicrophoneAccessThen(
+        _ onResolved: @escaping @MainActor () -> Void,
+        authorizationStatus: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) },
+        requestAccess: (@escaping @Sendable (Bool) -> Void) -> Void = {
+            AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0)
+        }
+    ) {
+        switch authorizationStatus() {
         case .authorized:
-            onGranted()
+            onResolved()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                Task { @MainActor in
-                    if granted { onGranted() } else { self.rebuildMenu() }
-                }
+            requestAccess { _ in
+                Task { @MainActor in onResolved() }
             }
         case .denied, .restricted:
-            onGranted()
+            onResolved()
         @unknown default:
-            onGranted()
+            onResolved()
         }
     }
 

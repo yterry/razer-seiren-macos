@@ -46,6 +46,53 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertNil(engine.activeSource)
     }
 
+    func testDeniedAccessKeepsChosenModeWithoutADevice() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
+                                   microphoneAccess: { .denied })
+        defer { engine.shutdown() }
+        XCTAssertEqual(engine.state, .stopped)
+        for mode in [MonitorEngine.Mode.always, .auto] {
+            engine.setMode(mode)
+            XCTAssertEqual(engine.mode, mode)
+            XCTAssertEqual(engine.state, .permissionDenied)
+        }
+        engine.setMode(.off)
+        XCTAssertEqual(engine.state, .stopped)
+    }
+
+    func testRecheckingAccessRecoversWithoutChangingMode() {
+        let access = AccessStub(.denied)
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
+                                   microphoneAccess: { access.value })
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .permissionDenied)
+
+        access.value = .granted
+        engine.setMode(engine.mode)
+        XCTAssertEqual(engine.mode, .always)
+        XCTAssertEqual(engine.state, .noDevice)
+
+        access.value = .denied
+        engine.setMode(engine.mode)
+        XCTAssertEqual(engine.state, .permissionDenied)
+    }
+
+    func testDeniedReconciliationClearsPendingRouteRetry() {
+        let access = AccessStub(.granted)
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
+                                   microphoneAccess: { access.value })
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        access.value = .denied
+        engine.setMode(engine.mode)
+        XCTAssertEqual(engine.state, .permissionDenied)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
     func testLevelClampsToUnitRange() {
         let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
         defer { engine.shutdown() }
@@ -578,14 +625,23 @@ final class MonitorEngineTests: XCTestCase {
         let pro = MonitorEngine.Source(device: mic(1, "Seiren", output: true), isSeiren: true)
         let fallback = MonitorEngine.Source(device: mic(2, "Headset", output: true), isSeiren: false)
         func policy(_ mode: MonitorEngine.Mode, _ source: MonitorEngine.Source?,
-                    fx: Bool = true, recording: Set<UInt32> = [], mix: Bool = false) -> MonitorEngine.State {
+                    fx: Bool = true, recording: Set<UInt32> = [], mix: Bool = false,
+                    access: MonitorEngine.MicrophoneAccess = .granted) -> MonitorEngine.State {
             MonitorEngine.runPolicy(mode: mode, source: source, fxInstalled: fx,
                                     recordingDevices: recording, fxDeviceID: 10,
-                                    streamMixDeviceID: 11, includeStreamMixInTriggers: mix)
+                                    streamMixDeviceID: 11, includeStreamMixInTriggers: mix,
+                                    microphoneAccess: access)
         }
         for mode in [MonitorEngine.Mode.off, .always, .auto] {
             XCTAssertEqual(policy(mode, nil), mode == .off ? .stopped : .noDevice)
             XCTAssertEqual(policy(mode, mini, fx: false), mode == .off ? .stopped : .needsFX)
+            for source in [nil, mini, pro, fallback] {
+                XCTAssertEqual(policy(mode, source, recording: [1, 10, 11], mix: true, access: .denied),
+                               mode == .off ? .stopped : .permissionDenied)
+                XCTAssertEqual(policy(mode, source, fx: false, access: .denied),
+                               mode == .off ? .stopped : .permissionDenied)
+                XCTAssertEqual(policy(mode, source, access: .undetermined), policy(mode, source))
+            }
         }
         XCTAssertEqual(policy(.off, pro, recording: [1, 10, 11], mix: true), .stopped)
         XCTAssertEqual(policy(.always, pro, fx: false), .running)
@@ -607,6 +663,12 @@ final class MonitorEngineTests: XCTestCase {
         }
         XCTAssertEqual(policy(.auto, pro, recording: [11]), .waiting)
         XCTAssertEqual(policy(.auto, pro, recording: [11], mix: true), .running)
+    }
+
+    @MainActor
+    private final class AccessStub {
+        var value: MonitorEngine.MicrophoneAccess
+        init(_ value: MonitorEngine.MicrophoneAccess) { self.value = value }
     }
 
     private final class DelegateSpy: MonitorEngineDelegate {
