@@ -91,7 +91,7 @@ else
   # bypass (see README). Pass SIGN_ID to sign properly.
   codesign --force --sign - "${APP}"
 fi
-codesign --verify --strict --verbose=2 "${APP}" || true
+codesign --verify --strict --verbose=2 "${APP}"
 
 # --- Zip for distribution (ditto preserves the bundle structure) ---------
 ZIP="${DIST}/${APP_NAME}-${VERSION}.zip"
