@@ -255,6 +255,8 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
 /// `state` is the *actual* state; the engine reconciles it against `mode` and
 /// what hardware/other-apps are present, driven by a `kAudioHardwarePropertyDevices`
 /// hotplug listener plus (in `.auto`) a low-rate poll of recording processes.
+/// A start that ends in `.failed` also schedules one reconcile for the moment
+/// its backoff expires (`startRetryDelay`), so it recovers with no hardware event.
 ///
 /// Threading: this is a `@MainActor` type. All public API and Core Audio device
 /// management runs on the main thread. The only RT-thread code is the
@@ -569,6 +571,9 @@ public final class MonitorEngine {
     // MARK: - User intent
 
     /// Set the monitoring mode (the user's intent). Idempotent.
+    /// Changing to a different mode clears a recorded start failure, so the
+    /// next start is attempted at once. Setting the current mode keeps the
+    /// failure and its retry timer.
     public func setMode(_ newMode: Mode) {
         isShutdown = false
         if newMode != mode {
