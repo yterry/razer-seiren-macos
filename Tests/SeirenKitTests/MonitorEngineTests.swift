@@ -202,14 +202,25 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertEqual(choose([line, builtIn])?.device, builtIn)
     }
 
+    func testStartRetryDelayTable() {
+        for result in [MonitorEngine.State.stopped, .running, .waiting, .noDevice, .needsFX, .permissionDenied] {
+            for count in 1...6 {
+                XCTAssertNil(MonitorEngine.startRetryDelay(result: result, consecutiveFailures: count))
+            }
+        }
+        for (count, delay) in [(1, 5.0), (2, 10), (3, 20), (4, 60), (5, 60), (100, 60)] {
+            XCTAssertEqual(MonitorEngine.startRetryDelay(result: .failed(-1), consecutiveFailures: count), delay)
+        }
+    }
+
     func testStartRetryBackoffTable() {
-        for result in [MonitorEngine.State.failed(-1), .permissionDenied] {
-            let failure = MonitorEngine.StartFailure.recording(result: result, sourceID: 1,
-                                                                fxDeviceID: 10, now: 100)
-            XCTAssertNotNil(failure)
+        var failure: MonitorEngine.StartFailure?
+        for delay in [5.0, 10, 20, 60, 60] {
+            failure = MonitorEngine.StartFailure.recording(result: .failed(-1), sourceID: 1,
+                                                            fxDeviceID: 10, now: 100, previous: failure)
             let cases: [(UInt32, UInt32?, TimeInterval, Bool)] = [
-                (1, 10, 100, false), (1, 10, 104.999, false),
-                (1, 10, 105, true), (1, 10, 106, true),
+                (1, 10, 100, false), (1, 10, 100 + delay - 0.001, false),
+                (1, 10, 100 + delay, true), (1, 10, 101 + delay, true),
                 (2, 10, 100, true), (1, 11, 100, true), (1, nil, 100, true),
             ]
             for (source, fx, now, expected) in cases {
@@ -217,8 +228,16 @@ final class MonitorEngineTests: XCTestCase {
                                                                failure: failure, now: now), expected)
             }
         }
+        let denied = MonitorEngine.StartFailure.recording(result: .permissionDenied, sourceID: 1,
+                                                           fxDeviceID: 10, now: 100)
+        XCTAssertFalse(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                      failure: denied, now: 104.999))
+        XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                     failure: denied, now: 105))
+        XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 2, fxDeviceID: 10,
+                                                     failure: denied, now: 100))
         let cleared = MonitorEngine.StartFailure.recording(result: .running, sourceID: 1,
-                                                            fxDeviceID: 10, now: 101)
+                                                            fxDeviceID: 10, now: 101, previous: failure)
         XCTAssertNil(cleared)
         XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
                                                      failure: cleared, now: 101))
@@ -228,6 +247,141 @@ final class MonitorEngineTests: XCTestCase {
                                                       failure: directFailure, now: 104))
         XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
                                                      failure: directFailure, now: 100))
+    }
+
+    func testStartFailureCountResetsWhenSourceOrFXChanges() {
+        let first = MonitorEngine.StartFailure.recording(result: .failed(-1), sourceID: 1,
+                                                          fxDeviceID: 10, now: 100)
+        let repeated = MonitorEngine.StartFailure.recording(result: .failed(-2), sourceID: 1,
+                                                             fxDeviceID: 10, now: 105, previous: first)
+        XCTAssertEqual(first?.consecutiveFailures, 1)
+        XCTAssertEqual(repeated?.consecutiveFailures, 2)
+        for (source, fx) in [(UInt32(2), UInt32?(10)), (1, 11), (1, nil)] {
+            let changed = MonitorEngine.StartFailure.recording(result: .failed(-1), sourceID: source,
+                                                                fxDeviceID: fx, now: 115, previous: repeated)
+            XCTAssertEqual(changed?.consecutiveFailures, 1)
+        }
+        let denied = MonitorEngine.StartFailure.recording(result: .permissionDenied, sourceID: 1,
+                                                           fxDeviceID: 10, now: 115, previous: repeated)
+        let afterDenial = MonitorEngine.StartFailure.recording(result: .failed(-1), sourceID: 1,
+                                                                fxDeviceID: 10, now: 120, previous: denied)
+        XCTAssertEqual(afterDenial?.consecutiveFailures, 1)
+    }
+
+    func testRetryTimerIsCancelledWhenModeIsOff() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+        engine.setMode(.off)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
+    func testRetryTimerIsCancelledOnShutdown() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+        engine.shutdown()
+        XCTAssertFalse(engine.isRetryScheduled)
+        engine.retryNow()
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(engine.state, .stopped)
+    }
+
+    func testRetryTimerIsCancelledOnOtherTeardown() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+        engine.setStandbyAllowed(false)
+        XCTAssertEqual(engine.state, .noDevice)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
+    func testSuccessfulStartClearsFailureAndRetryTimer() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+        engine.recordStartResult(.running, sourceID: 1, fxDeviceID: 10)
+        XCTAssertNil(engine.startFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
+    func testPermissionDenialDoesNotScheduleRetry() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertTrue(engine.isRetryScheduled)
+        engine.recordStartResult(.permissionDenied, sourceID: 1, fxDeviceID: 10)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
+    func testRetryNowClearsFailureAndReconciles() {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        for result in [MonitorEngine.State.failed(-1), .permissionDenied] {
+            engine.recordStartResult(result, sourceID: 1, fxDeviceID: 10)
+            XCTAssertNotNil(engine.startFailure)
+            XCTAssertEqual(engine.state, result)
+            engine.retryNow()
+            XCTAssertNil(engine.startFailure)
+            XCTAssertFalse(engine.isRetryScheduled)
+            XCTAssertEqual(engine.state, .noDevice)
+        }
+    }
+
+    func testModeChangeClearsFailureSoTheNextStartIsNotGated() throws {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        for _ in 1...4 { engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10) }
+        let recorded = try XCTUnwrap(engine.startFailure)
+        XCTAssertEqual(recorded.consecutiveFailures, 4)
+        XCTAssertTrue(engine.isRetryScheduled)
+        let tenSecondsLater = recorded.time + 10
+        XCTAssertFalse(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                      failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.startFailure, recorded)
+        XCTAssertFalse(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                      failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.setMode(.off)
+        engine.setMode(.always)
+        XCTAssertNil(engine.startFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                     failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertEqual(engine.startFailure?.consecutiveFailures, 1)
+    }
+
+    func testRetryTimerReconcilesAfterBackoff() async {
+        let started = ProcessInfo.processInfo.systemUptime
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        let reconciled = expectation(description: "retry reconciles without a hardware event")
+        let spy = DelegateSpy()
+        spy.onChange = { engine in
+            if engine.state == .noDevice { reconciled.fulfill() }
+        }
+        engine.delegate = spy
+        XCTAssertTrue(engine.isRetryScheduled)
+        await fulfillment(of: [reconciled], timeout: 10)
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - started, 5)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(engine.state, .noDevice)
     }
 
     func testPollPreservesFailuresOnlyWhenWaiting() {
@@ -457,6 +611,10 @@ final class MonitorEngineTests: XCTestCase {
 
     private final class DelegateSpy: MonitorEngineDelegate {
         var changeCount = 0
-        func monitorEngineDidChange(_ engine: MonitorEngine) { changeCount += 1 }
+        var onChange: ((MonitorEngine) -> Void)?
+        func monitorEngineDidChange(_ engine: MonitorEngine) {
+            changeCount += 1
+            onChange?(engine)
+        }
     }
 }
