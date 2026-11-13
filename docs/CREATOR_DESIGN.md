@@ -347,6 +347,7 @@ monitorIOProc(buffer):
 
 **App:**
 - `Settings.swift` (NEW) — typed `UserDefaults` wrapper with `schemaVersion` + `migrate()`. **Lands as the first commit of v0.2, before any new keys** (today there is only the ad-hoc `legacyEnabled → .always` migration; 6+ new keys across three features need versioning). Namespaced keys: `voice.eq.*`, `voice.ns.*`, `lighting.*`.
+  As built, it lives in SeirenKit (`Sources/SeirenKit/Settings.swift`) so that `Tests/SeirenKitTests/SettingsTests.swift` can test the defaults and migrations.
 - `AppDelegate` gains `voiceSubmenu()` and `lightingSubmenu()` builders.
 
 The two planes are kept strictly separate: audio never sends HID; lighting never touches the audio thread; their only overlaps are the Input-Monitoring TCC grant and (for any future DSP-over-HID) the one serialized HID channel.
