@@ -51,7 +51,7 @@ else
   echo "==> codesign ad-hoc (no Developer ID provided)"
   codesign --force --sign - "${DRIVER}"
 fi
-codesign --verify --strict --verbose=2 "${DRIVER}" || true
+codesign --verify --strict --verbose=2 "${DRIVER}"
 
 echo "==> built ${DRIVER}"
 echo "    file: $(file -b "${EXE}")"

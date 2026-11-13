@@ -39,7 +39,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Test
-        run: swift test
+        run: make test
 
       - name: Import Developer ID certificate
         id: sign
@@ -116,6 +116,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: VERSION="${{ steps.ver.outputs.version }}" scripts/notarize.sh
+
+      - name: Verify release archive
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: scripts/verify-release.sh "dist/Seiren-${{ steps.ver.outputs.version }}.zip" "${{ steps.ver.outputs.version }}"
 
       - name: Create GitHub Release
         env:
