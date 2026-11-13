@@ -469,7 +469,10 @@ public final class MonitorEngine {
     private var aggregateID: AudioObjectID?       // private aggregate, when routing through SeirenFX
     private var liveSampleRate: Double = 0        // rate of the device the proc runs on (diagnostics)
     private var autoTimer: Timer?
-    private var startFailure: StartFailure?
+    private(set) var startFailure: StartFailure?
+    private var retryTimer: Timer?
+    private var retryGeneration = 0
+    var isRetryScheduled: Bool { retryTimer != nil }
     private var recorderAbsentSince: TimeInterval?
     private var routeWasRecorderDriven = false
     private var lastRecorderPresence: Bool?
@@ -571,6 +574,13 @@ public final class MonitorEngine {
         if newMode != mode { stopStandby(reason: "mode changed to \(newMode.rawValue)") }
         mode = newMode
         installDevicesListenerIfNeeded()
+        reconcile()
+    }
+
+    /// Clear start backoff and immediately reconsider the current route.
+    public func retryNow() {
+        stopRetryTimer()
+        startFailure = nil
         reconcile()
     }
 
@@ -787,20 +797,36 @@ public final class MonitorEngine {
         if procID != nil, procSourceID == dev, procSourceUID == selectedSource?.device.uid,
            procFXDeviceID == fx,
            let procDeviceID, AudioDevices.isAlive(procDeviceID) {
+            startFailure = nil
+            stopRetryTimer()
             state = .running
             return
         }
         // Aggregate creation/destruction fires the devices listener too. Every
         // entry point must respect backoff, including those self-made events.
         guard Self.shouldRetryStart(sourceID: dev, fxDeviceID: fx, failure: startFailure,
-                                    now: ProcessInfo.processInfo.systemUptime) else { return }
+                                    now: ProcessInfo.processInfo.systemUptime) else {
+            if !isRetryScheduled { scheduleStartRetry() }
+            return
+        }
         teardownProc(reason: "route identity changed or device gone")
         procSourceID = dev
         procSourceUID = selectedSource?.device.uid
         procFXDeviceID = fx
+        let previousFailure = startFailure
         startProc(on: dev)
-        startFailure = StartFailure.recording(result: state, sourceID: dev, fxDeviceID: fx,
-                                              now: ProcessInfo.processInfo.systemUptime)
+        // Initial sample-rate validation can already record a restart failure.
+        // Count that failed start once, even when it happens inside startProc.
+        if startFailure == previousFailure {
+            recordStartResult(state, sourceID: dev, fxDeviceID: fx)
+        }
+    }
+
+    func recordStartResult(_ result: State, sourceID: AudioObjectID, fxDeviceID: AudioObjectID?) {
+        startFailure = StartFailure.recording(result: result, sourceID: sourceID, fxDeviceID: fxDeviceID,
+                                              now: ProcessInfo.processInfo.systemUptime, previous: startFailure)
+        scheduleStartRetry()
+        state = result
     }
 
     /// All sources use the aggregate for FX. Only a headphone-equipped Seiren
@@ -926,6 +952,7 @@ public final class MonitorEngine {
     }
 
     private func teardownProc(reason: String) {
+        stopRetryTimer()
         startupLogTimer?.invalidate()
         startupLogTimer = nil
         routeStartedAt = nil
@@ -989,13 +1016,15 @@ public final class MonitorEngine {
             result = stopped
         }
         if result != noErr {
-            state = isProbablyPermissionError(result) ? .permissionDenied : .failed(result)
-            if let sourceID = procSourceID {
-                startFailure = StartFailure.recording(result: state, sourceID: sourceID,
-                                                      fxDeviceID: procFXDeviceID,
-                                                      now: ProcessInfo.processInfo.systemUptime)
-            }
+            let failure: State = isProbablyPermissionError(result) ? .permissionDenied : .failed(result)
+            let sourceID = procSourceID
+            let fxDeviceID = procFXDeviceID
             teardownProc(reason: "sample-rate restart failed status=\(result)")
+            if let sourceID {
+                recordStartResult(failure, sourceID: sourceID, fxDeviceID: fxDeviceID)
+            } else {
+                state = failure
+            }
         }
         notify()
     }
@@ -1039,6 +1068,35 @@ public final class MonitorEngine {
                 recorderListeners[dev] = block
             }
         }
+    }
+
+    // MARK: - Failed-start retry timer
+
+    private func scheduleStartRetry() {
+        stopRetryTimer()
+        guard !isShutdown, mode != .off, let failure = startFailure,
+              let delay = Self.startRetryDelay(result: failure.result,
+                                               consecutiveFailures: failure.consecutiveFailures) else { return }
+        let remaining = max(0, failure.time + delay - ProcessInfo.processInfo.systemUptime)
+        let generation = retryGeneration
+        let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.retryGeneration == generation else { return }
+                self.stopRetryTimer()
+                // Reconciliation uses shouldRetryStart, including if this timer
+                // fired slightly early or hardware changed while it was pending.
+                self.reconcile()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
+    }
+
+    private func stopRetryTimer() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        // Also invalidate callbacks that have already hopped to the main actor.
+        retryGeneration += 1
     }
 
     // MARK: - Auto-mode poll timer
@@ -1138,23 +1196,46 @@ public final class MonitorEngine {
         var sourceID: AudioObjectID
         var fxDeviceID: AudioObjectID?
         var time: TimeInterval
+        var result: State
+        var consecutiveFailures: Int
 
         /// A successful start clears the previous failure. Idle reconciliation
         /// must retain it so aggregate hotplug events cannot bypass backoff.
         static func recording(result: State, sourceID: AudioObjectID,
-                              fxDeviceID: AudioObjectID?, now: TimeInterval) -> StartFailure? {
+                              fxDeviceID: AudioObjectID?, now: TimeInterval,
+                              previous: StartFailure? = nil) -> StartFailure? {
             switch result {
-            case .failed, .permissionDenied:
-                return StartFailure(sourceID: sourceID, fxDeviceID: fxDeviceID, time: now)
+            case .failed:
+                let samePair = previous?.sourceID == sourceID && previous?.fxDeviceID == fxDeviceID
+                let count = samePair ? (previous?.consecutiveFailures ?? 0) + 1 : 1
+                return StartFailure(sourceID: sourceID, fxDeviceID: fxDeviceID, time: now,
+                                    result: result, consecutiveFailures: count)
+            case .permissionDenied:
+                return StartFailure(sourceID: sourceID, fxDeviceID: fxDeviceID, time: now,
+                                    result: result, consecutiveFailures: 0)
             default: return nil
             }
+        }
+    }
+
+    nonisolated static func startRetryDelay(result: State, consecutiveFailures: Int) -> TimeInterval? {
+        guard case .failed = result else { return nil }
+        switch consecutiveFailures {
+        case ...1: return 5
+        case 2: return 10
+        case 3: return 20
+        default: return 60
         }
     }
 
     nonisolated static func shouldRetryStart(sourceID: AudioObjectID, fxDeviceID: AudioObjectID?,
                                              failure: StartFailure?, now: TimeInterval) -> Bool {
         guard let failure, failure.sourceID == sourceID, failure.fxDeviceID == fxDeviceID else { return true }
-        return now - failure.time >= 5
+        // Permission denials keep their existing event-driven cooldown, but
+        // scheduleStartRetry never schedules a timer for them.
+        let delay = startRetryDelay(result: failure.result,
+                                    consecutiveFailures: failure.consecutiveFailures) ?? 5
+        return now - failure.time >= delay
     }
 
     nonisolated static func reconciledState(decision: State, current: State, fromPoll: Bool) -> State {
