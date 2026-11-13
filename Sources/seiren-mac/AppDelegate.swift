@@ -16,11 +16,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - State
 
     private var statusItem: NSStatusItem!
+    private let statusMenu = NSMenu()
+    private var statusMenuIsOpen = false
     /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
     /// to exercise the menu without the hardware. Not a user setting.
     private let engine = MonitorEngine(
-        deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren")
+        deviceNameMatch: ProcessInfo.processInfo.environment["SEIREN_DEVICE_MATCH"] ?? "seiren",
+        microphoneAccess: {
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: return .granted
+            case .denied, .restricted: return .denied
+            case .notDetermined: return .undetermined
+            @unknown default: return .undetermined
+            }
+        })
     private let mixer = MixerEngine()
     private let lighting = LightingController()
     private let settings = Settings()
@@ -63,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusMenu.delegate = self
+        statusItem.menu = statusMenu
         configureStatusButtonImage()
 
         engine.delegate = self
@@ -111,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         if restored == .off {
             engine.setMode(.off)
         } else {
-            requestMicrophoneAccessThen { [weak self] in self?.engine.setMode(restored) }
+            Self.requestMicrophoneAccessThen { [weak self] in self?.engine.setMode(restored) }
         }
     }
 
@@ -155,6 +167,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === mixerMenu { populateMixerMenu(menu) }
+        if menu === statusMenu {
+            // System Settings can change authorization while the app stays open.
+            engine.recheckMicrophoneAccess()
+            populateStatusMenu()
+            configureStatusButtonImage()
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu === statusMenu { statusMenuIsOpen = true }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu === statusMenu { statusMenuIsOpen = false }
     }
 
     // MARK: - LightingControllerDelegate
@@ -181,8 +207,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     // MARK: - Menu construction
 
+    /// The menu on screen keeps its items; `menuNeedsUpdate` populates it
+    /// again before the next display.
     private func rebuildMenu() {
-        let menu = NSMenu()
+        guard !statusMenuIsOpen else { return }
+        populateStatusMenu()
+    }
+
+    private func populateStatusMenu() {
+        let menu = statusMenu
+        menu.removeAllItems()
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
@@ -249,8 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-
-        statusItem.menu = menu
     }
 
     /// Show the Lighting submenu unless the only Seiren we can see is a model
@@ -779,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             rebuildMenu()
         } else {
             // Both always/auto read the mic → ensure permission, then apply.
-            requestMicrophoneAccessThen { [weak self] in
+            Self.requestMicrophoneAccessThen { [weak self] in
                 guard let self else { return }
                 self.engine.setMode(mode)
                 self.rebuildMenu()
@@ -936,23 +968,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     // MARK: - Microphone permission
 
-    /// Ensure the prompt has been shown and run `onGranted` if access is (or
-    /// becomes) authorized. On denial we still call through so the engine can
+    /// Ensure the prompt has been shown, then apply the chosen mode.
+    /// On denial we still call through so the engine can
     /// surface `.permissionDenied` with the Settings shortcut.
-    private func requestMicrophoneAccessThen(_ onGranted: @escaping @MainActor () -> Void) {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    static func requestMicrophoneAccessThen(
+        _ onResolved: @escaping @MainActor () -> Void,
+        authorizationStatus: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) },
+        requestAccess: (@escaping @Sendable (Bool) -> Void) -> Void = {
+            AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0)
+        }
+    ) {
+        switch authorizationStatus() {
         case .authorized:
-            onGranted()
+            onResolved()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                Task { @MainActor in
-                    if granted { onGranted() } else { self.rebuildMenu() }
-                }
+            requestAccess { _ in
+                Task { @MainActor in onResolved() }
             }
         case .denied, .restricted:
-            onGranted()
+            onResolved()
         @unknown default:
-            onGranted()
+            onResolved()
         }
     }
 

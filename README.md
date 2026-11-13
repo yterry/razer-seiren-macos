@@ -325,7 +325,7 @@ hardware forgets its lighting state on unplug.
 ### Run the tests / dev build
 
 ```sh
-swift test                         # unit tests (SeirenKit)
+swift test                         # unit tests (SeirenKit and the app)
 bash scripts/test-driver.sh        # SeirenFX driver tests (make test runs both)
 swift run seiren-mac               # debug build of the menu-bar app
 swift run seiren-probe             # read-only dump of the Seiren's audio controls

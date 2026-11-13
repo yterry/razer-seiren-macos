@@ -252,9 +252,11 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
 ///                macOS 14+ per-process audio API; on older macOS it falls back
 ///                to behaving like `.always`.
 ///
-/// `state` is the *actual* state; the engine reconciles it against `mode` and
-/// what hardware/other-apps are present, driven by a `kAudioHardwarePropertyDevices`
-/// hotplug listener plus (in `.auto`) a low-rate poll of recording processes.
+/// `state` is the *actual* state; the engine reconciles it against `mode`, the
+/// host's microphone access, and what hardware/other-apps are present, driven by
+/// a `kAudioHardwarePropertyDevices` hotplug listener plus (in `.auto`) a
+/// low-rate poll of recording processes. Hosts call `recheckMicrophoneAccess()`
+/// when the authorization may have changed outside the app.
 /// A start that ends in `.failed` also schedules one reconcile for the moment
 /// its backoff expires (`startRetryDelay`), so it recovers with no hardware event.
 ///
@@ -266,6 +268,10 @@ public final class MonitorEngine {
 
     public enum Mode: String, Equatable, Sendable {
         case off, always, auto
+    }
+
+    public enum MicrophoneAccess: Equatable, Sendable {
+        case granted, denied, undetermined
     }
 
     public enum State: Equatable {
@@ -460,6 +466,8 @@ public final class MonitorEngine {
     private let preferredBufferFrames: UInt32
     private let autoPollInterval: TimeInterval
     private let fallbackEnabled: Bool
+    private let microphoneAccess: @MainActor () -> MicrophoneAccess
+    private var lastMicrophoneAccess: MicrophoneAccess?
     private var selectedSource: Source?
     private var procSourceID: AudioObjectID?      // physical source of the live route
     private var procSourceUID: String?
@@ -528,14 +536,18 @@ public final class MonitorEngine {
     ///     running-state listener for prompt call detection.
     ///   - fallbackEnabled: disable non-Seiren sources for deterministic tests
     ///     and diagnostics that must target only a name-matched microphone.
+    ///   - microphoneAccess: the host's current microphone authorization.
+    ///     Defaults to granted for headless hosts that manage access themselves.
     public init(deviceNameMatch: String = "seiren",
                 preferredBufferFrames: UInt32 = 128,
                 autoPollInterval: TimeInterval = 1.5,
-                fallbackEnabled: Bool = true) {
+                fallbackEnabled: Bool = true,
+                microphoneAccess: @escaping @MainActor () -> MicrophoneAccess = { .granted }) {
         self.deviceNameMatch = deviceNameMatch.lowercased()
         self.preferredBufferFrames = preferredBufferFrames
         self.autoPollInterval = autoPollInterval
         self.fallbackEnabled = fallbackEnabled
+        self.microphoneAccess = microphoneAccess
         installDevicesListenerIfNeeded()
         reconcile()
     }
@@ -585,6 +597,12 @@ public final class MonitorEngine {
         reconcile()
     }
 
+    /// Re-read the host's microphone authorization and reconsider the route.
+    /// Like a poll, it keeps an unrelated failure visible while waiting.
+    public func recheckMicrophoneAccess() {
+        reconcile(fromPoll: true)
+    }
+
     /// Clear start backoff and immediately reconsider the current route.
     public func retryNow() {
         clearStartFailure()
@@ -615,6 +633,9 @@ public final class MonitorEngine {
 
     private func reconcile(fromPoll: Bool = false) {
         guard !isShutdown else { return }
+        let access = microphoneAccess()
+        let accessRecovered = lastMicrophoneAccess == .denied && access != .denied
+        lastMicrophoneAccess = access
         otherInputsSupported = AudioDevices.recordingProcessesSupported
         let candidates = AudioDevices.candidates()
         let fx = AudioDevices.fxDevice()
@@ -641,7 +662,7 @@ public final class MonitorEngine {
             InputDevice(uid: $0.device.uid, name: $0.device.name, isSeiren: $0.isSeiren)
         }
         deviceHasHeadphoneOutput = source.map { $0.isSeiren && $0.device.hasOutput } ?? true
-        reconcileStandby(source: source, fxInstalled: fx != nil)
+        reconcileStandby(source: source, fxInstalled: fx != nil, microphoneAccess: access)
 
         let dependsOnRecorders = mode == .auto || (mode != .off && source?.isSeiren == false)
         if dependsOnRecorders { startAutoTimer() } else { stopAutoTimer() }
@@ -664,7 +685,8 @@ public final class MonitorEngine {
         let decision = Self.runPolicy(mode: mode, source: source, fxInstalled: fxOutput != nil,
                                       recordingDevices: recording, fxDeviceID: fx,
                                       streamMixDeviceID: streamMix,
-                                      includeStreamMixInTriggers: includeStreamMixInTriggers)
+                                      includeStreamMixInTriggers: includeStreamMixInTriggers,
+                                      microphoneAccess: access)
         if dependsOnRecorders {
             let present = !recording.isEmpty
             if present != lastRecorderPresence {
@@ -696,7 +718,8 @@ public final class MonitorEngine {
             default: reason = "\(decision)"
             }
             teardownProc(reason: reason)
-            state = Self.reconciledState(decision: decision, current: state, fromPoll: fromPoll)
+            state = Self.reconciledState(decision: decision, current: state, fromPoll: fromPoll,
+                                         accessRecovered: accessRecovered)
         }
     }
 
@@ -704,11 +727,12 @@ public final class MonitorEngine {
 
     // MARK: - Output-only warm standby
 
-    private func reconcileStandby(source: Source?, fxInstalled: Bool) {
+    private func reconcileStandby(source: Source?, fxInstalled: Bool, microphoneAccess: MicrophoneAccess) {
         guard Self.shouldRunStandby(mode: mode, source: source, fxInstalled: fxInstalled,
-                                    allowed: standbyAllowed), let source else {
+                                    allowed: standbyAllowed && microphoneAccess != .denied), let source else {
             let reason: String
             if mode != .auto { reason = "mode \(mode.rawValue)" }
+            else if microphoneAccess == .denied { reason = "microphone access denied" }
             else if !standbyAllowed { reason = "host suspended standby" }
             else if source == nil { reason = "device gone" }
             else if !fxInstalled { reason = "FX unavailable" }
@@ -1040,6 +1064,8 @@ public final class MonitorEngine {
         notify()
     }
 
+    // Fallback for a start that fails while the host's `microphoneAccess` does
+    // not report a denial (the default for headless hosts is granted).
     // `kAudioHardwareIllegalOperationError` is what an input start typically
     // returns when Microphone access is denied. Treat the common denial codes
     // as permission, everything else as a real failure.
@@ -1249,10 +1275,13 @@ public final class MonitorEngine {
         return now - failure.time >= delay
     }
 
-    nonisolated static func reconciledState(decision: State, current: State, fromPoll: Bool) -> State {
+    nonisolated static func reconciledState(decision: State, current: State, fromPoll: Bool,
+                                            accessRecovered: Bool) -> State {
         // Keep actionable errors visible after a call ends, but allow polls and
         // recorder listeners to recover a live call after the retry interval.
-        fromPoll && decision == .waiting && current.isSticky ? current : decision
+        // A denial stops applying once the host reports access again.
+        let sticky = current.isSticky && !(accessRecovered && current == .permissionDenied)
+        return fromPoll && decision == .waiting && sticky ? current : decision
     }
 
     /// Only missing recorder evidence gets a grace period. Identity / liveness
@@ -1276,9 +1305,11 @@ public final class MonitorEngine {
     nonisolated static func runPolicy(
         mode: Mode, source: Source?, fxInstalled: Bool,
         recordingDevices: Set<AudioObjectID>, fxDeviceID: AudioObjectID?,
-        streamMixDeviceID: AudioObjectID?, includeStreamMixInTriggers: Bool
+        streamMixDeviceID: AudioObjectID?, includeStreamMixInTriggers: Bool,
+        microphoneAccess: MicrophoneAccess = .granted
     ) -> State {
         guard mode != .off else { return .stopped }
+        guard microphoneAccess != .denied else { return .permissionDenied }
         guard let source else { return .noDevice }
         if source.isSeiren && !source.device.hasOutput && !fxInstalled { return .needsFX }
         if source.isSeiren && mode == .always { return .running }

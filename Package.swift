@@ -75,5 +75,6 @@ let package = Package(
             name: "SeirenKitTests",
             dependencies: ["SeirenKit", "SeirenDSP", "RNNoise"]
         ),
+        .testTarget(name: "SeirenMacTests", dependencies: ["seiren-mac", "SeirenKit"]),
     ]
 )
