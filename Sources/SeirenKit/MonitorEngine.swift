@@ -465,6 +465,7 @@ public final class MonitorEngine {
     private let autoPollInterval: TimeInterval
     private let fallbackEnabled: Bool
     private let microphoneAccess: @MainActor () -> MicrophoneAccess
+    private var lastMicrophoneAccess: MicrophoneAccess?
     private var selectedSource: Source?
     private var procSourceID: AudioObjectID?      // physical source of the live route
     private var procSourceUID: String?
@@ -594,6 +595,12 @@ public final class MonitorEngine {
         reconcile()
     }
 
+    /// Re-read the host's microphone authorization and reconsider the route.
+    /// Like a poll, it keeps an unrelated failure visible while waiting.
+    public func recheckMicrophoneAccess() {
+        reconcile(fromPoll: true)
+    }
+
     /// Clear start backoff and immediately reconsider the current route.
     public func retryNow() {
         clearStartFailure()
@@ -625,6 +632,8 @@ public final class MonitorEngine {
     private func reconcile(fromPoll: Bool = false) {
         guard !isShutdown else { return }
         let access = microphoneAccess()
+        let accessRecovered = lastMicrophoneAccess == .denied && access != .denied
+        lastMicrophoneAccess = access
         otherInputsSupported = AudioDevices.recordingProcessesSupported
         let candidates = AudioDevices.candidates()
         let fx = AudioDevices.fxDevice()
@@ -707,7 +716,8 @@ public final class MonitorEngine {
             default: reason = "\(decision)"
             }
             teardownProc(reason: reason)
-            state = Self.reconciledState(decision: decision, current: state, fromPoll: fromPoll)
+            state = Self.reconciledState(decision: decision, current: state, fromPoll: fromPoll,
+                                         accessRecovered: accessRecovered)
         }
     }
 
@@ -1261,10 +1271,13 @@ public final class MonitorEngine {
         return now - failure.time >= delay
     }
 
-    nonisolated static func reconciledState(decision: State, current: State, fromPoll: Bool) -> State {
+    nonisolated static func reconciledState(decision: State, current: State, fromPoll: Bool,
+                                            accessRecovered: Bool) -> State {
         // Keep actionable errors visible after a call ends, but allow polls and
         // recorder listeners to recover a live call after the retry interval.
-        fromPoll && decision == .waiting && current.isSticky ? current : decision
+        // A denial stops applying once the host reports access again.
+        let sticky = current.isSticky && !(accessRecovered && current == .permissionDenied)
+        return fromPoll && decision == .waiting && sticky ? current : decision
     }
 
     /// Only missing recorder evidence gets a grace period. Identity / liveness

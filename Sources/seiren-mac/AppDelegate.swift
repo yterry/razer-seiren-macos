@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - State
 
     private var statusItem: NSStatusItem!
+    private let statusMenu = NSMenu()
+    private var statusMenuIsOpen = false
     /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
     /// to exercise the menu without the hardware. Not a user setting.
@@ -71,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusMenu.delegate = self
+        statusItem.menu = statusMenu
         configureStatusButtonImage()
 
         engine.delegate = self
@@ -163,15 +167,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === mixerMenu { populateMixerMenu(menu) }
+        if menu === statusMenu {
+            // System Settings can change authorization while the app stays open.
+            engine.recheckMicrophoneAccess()
+            populateStatusMenu()
+            configureStatusButtonImage()
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        guard menu === statusItem.menu, engine.mode != .off else { return }
-        // System Settings can change authorization while the app stays open.
-        // Reconcile and populate the opening menu itself before it is displayed.
-        engine.setMode(engine.mode)
-        rebuildMenu(menu)
-        configureStatusButtonImage()
+        if menu === statusMenu { statusMenuIsOpen = true }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu === statusMenu { statusMenuIsOpen = false }
     }
 
     // MARK: - LightingControllerDelegate
@@ -198,9 +207,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     // MARK: - Menu construction
 
-    private func rebuildMenu(_ menu: NSMenu = NSMenu()) {
+    /// The menu on screen keeps its items; `menuNeedsUpdate` populates it
+    /// again before the next display.
+    private func rebuildMenu() {
+        guard !statusMenuIsOpen else { return }
+        populateStatusMenu()
+    }
+
+    private func populateStatusMenu() {
+        let menu = statusMenu
         menu.removeAllItems()
-        menu.delegate = self
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
@@ -267,8 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                               action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-
-        statusItem.menu = menu
     }
 
     /// Show the Lighting submenu unless the only Seiren we can see is a model

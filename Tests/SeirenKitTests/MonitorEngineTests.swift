@@ -69,12 +69,13 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertEqual(engine.state, .permissionDenied)
 
         access.value = .granted
-        engine.setMode(engine.mode)
+        engine.recheckMicrophoneAccess()
         XCTAssertEqual(engine.mode, .always)
         XCTAssertEqual(engine.state, .noDevice)
 
         access.value = .denied
-        engine.setMode(engine.mode)
+        engine.recheckMicrophoneAccess()
+        XCTAssertEqual(engine.mode, .always)
         XCTAssertEqual(engine.state, .permissionDenied)
     }
 
@@ -88,7 +89,7 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertTrue(engine.isRetryScheduled)
 
         access.value = .denied
-        engine.setMode(engine.mode)
+        engine.recheckMicrophoneAccess()
         XCTAssertEqual(engine.state, .permissionDenied)
         XCTAssertFalse(engine.isRetryScheduled)
     }
@@ -434,18 +435,31 @@ final class MonitorEngineTests: XCTestCase {
     func testPollPreservesFailuresOnlyWhenWaiting() {
         for current in [MonitorEngine.State.failed(-1), .permissionDenied, .needsFX] {
             XCTAssertEqual(MonitorEngine.reconciledState(decision: .waiting, current: current,
-                                                        fromPoll: true), current)
+                                                        fromPoll: true, accessRecovered: false), current)
             XCTAssertEqual(MonitorEngine.reconciledState(decision: .running, current: current,
-                                                        fromPoll: true), .running)
+                                                        fromPoll: true, accessRecovered: false), .running)
             XCTAssertEqual(MonitorEngine.reconciledState(decision: .stopped, current: current,
-                                                        fromPoll: true), .stopped)
+                                                        fromPoll: true, accessRecovered: false), .stopped)
             XCTAssertEqual(MonitorEngine.reconciledState(decision: .noDevice, current: current,
-                                                        fromPoll: true), .noDevice)
+                                                        fromPoll: true, accessRecovered: false), .noDevice)
             XCTAssertEqual(MonitorEngine.reconciledState(decision: .waiting, current: current,
-                                                        fromPoll: false), .waiting)
+                                                        fromPoll: false, accessRecovered: false), .waiting)
         }
         XCTAssertEqual(MonitorEngine.reconciledState(decision: .waiting, current: .running,
-                                                    fromPoll: true), .waiting)
+                                                    fromPoll: true, accessRecovered: false), .waiting)
+    }
+
+    func testRecoveredAccessClearsOnlyTheDenialWhileWaiting() {
+        XCTAssertEqual(MonitorEngine.reconciledState(decision: .waiting, current: .permissionDenied,
+                                                    fromPoll: true, accessRecovered: true), .waiting)
+        for current in [MonitorEngine.State.failed(-1), .needsFX] {
+            XCTAssertEqual(MonitorEngine.reconciledState(decision: .waiting, current: current,
+                                                        fromPoll: true, accessRecovered: true), current)
+        }
+        for decision in [MonitorEngine.State.running, .noDevice, .permissionDenied] {
+            XCTAssertEqual(MonitorEngine.reconciledState(decision: decision, current: .permissionDenied,
+                                                        fromPoll: true, accessRecovered: true), decision)
+        }
     }
 
     func testRecorderAbsenceKeepsRouteRunningWithinGrace() {
