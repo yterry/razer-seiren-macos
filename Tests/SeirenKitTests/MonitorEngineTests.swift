@@ -337,6 +337,34 @@ final class MonitorEngineTests: XCTestCase {
         }
     }
 
+    func testModeChangeClearsFailureSoTheNextStartIsNotGated() throws {
+        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        defer { engine.shutdown() }
+        engine.setMode(.always)
+        for _ in 1...4 { engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10) }
+        let recorded = try XCTUnwrap(engine.startFailure)
+        XCTAssertEqual(recorded.consecutiveFailures, 4)
+        XCTAssertTrue(engine.isRetryScheduled)
+        let tenSecondsLater = recorded.time + 10
+        XCTAssertFalse(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                      failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.startFailure, recorded)
+        XCTAssertFalse(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                      failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.setMode(.off)
+        engine.setMode(.always)
+        XCTAssertNil(engine.startFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertTrue(MonitorEngine.shouldRetryStart(sourceID: 1, fxDeviceID: 10,
+                                                     failure: engine.startFailure, now: tenSecondsLater))
+
+        engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
+        XCTAssertEqual(engine.startFailure?.consecutiveFailures, 1)
+    }
+
     func testRetryTimerReconcilesAfterBackoff() async {
         let started = ProcessInfo.processInfo.systemUptime
         let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)

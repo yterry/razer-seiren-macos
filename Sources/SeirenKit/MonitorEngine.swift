@@ -571,7 +571,10 @@ public final class MonitorEngine {
     /// Set the monitoring mode (the user's intent). Idempotent.
     public func setMode(_ newMode: Mode) {
         isShutdown = false
-        if newMode != mode { stopStandby(reason: "mode changed to \(newMode.rawValue)") }
+        if newMode != mode {
+            stopStandby(reason: "mode changed to \(newMode.rawValue)")
+            clearStartFailure()
+        }
         mode = newMode
         installDevicesListenerIfNeeded()
         reconcile()
@@ -579,9 +582,13 @@ public final class MonitorEngine {
 
     /// Clear start backoff and immediately reconsider the current route.
     public func retryNow() {
+        clearStartFailure()
+        reconcile()
+    }
+
+    private func clearStartFailure() {
         stopRetryTimer()
         startFailure = nil
-        reconcile()
     }
 
     /// Hosts suspend standby while the display or user session is asleep so
@@ -797,8 +804,7 @@ public final class MonitorEngine {
         if procID != nil, procSourceID == dev, procSourceUID == selectedSource?.device.uid,
            procFXDeviceID == fx,
            let procDeviceID, AudioDevices.isAlive(procDeviceID) {
-            startFailure = nil
-            stopRetryTimer()
+            clearStartFailure()
             state = .running
             return
         }
