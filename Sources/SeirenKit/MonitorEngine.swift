@@ -252,9 +252,11 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
 ///                macOS 14+ per-process audio API; on older macOS it falls back
 ///                to behaving like `.always`.
 ///
-/// `state` is the *actual* state; the engine reconciles it against `mode` and
-/// what hardware/other-apps are present, driven by a `kAudioHardwarePropertyDevices`
-/// hotplug listener plus (in `.auto`) a low-rate poll of recording processes.
+/// `state` is the *actual* state; the engine reconciles it against `mode`, the
+/// host's microphone access, and what hardware/other-apps are present, driven by
+/// a `kAudioHardwarePropertyDevices` hotplug listener plus (in `.auto`) a
+/// low-rate poll of recording processes. Hosts call `recheckMicrophoneAccess()`
+/// when the authorization may have changed outside the app.
 /// A start that ends in `.failed` also schedules one reconcile for the moment
 /// its backoff expires (`startRetryDelay`), so it recovers with no hardware event.
 ///
@@ -1062,6 +1064,8 @@ public final class MonitorEngine {
         notify()
     }
 
+    // Fallback for a start that fails while the host's `microphoneAccess` does
+    // not report a denial (the default for headless hosts is granted).
     // `kAudioHardwareIllegalOperationError` is what an input start typically
     // returns when Microphone access is denied. Treat the common denial codes
     // as permission, everything else as a real failure.
