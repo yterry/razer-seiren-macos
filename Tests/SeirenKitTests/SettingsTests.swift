@@ -5,10 +5,17 @@ import SeirenKit
 @MainActor
 final class SettingsTests: XCTestCase {
     private func makeDefaults() throws -> UserDefaults {
-        let suiteName = "SeirenKitTests.SettingsTests.\(UUID().uuidString)"
+        // A suite named by an absolute path is stored at <path>.plist, so each test keeps its suite in its own
+        // temporary directory. A plain suite name would leave an empty plist in ~/Library/Preferences after
+        // removePersistentDomain, written by the preferences daemon after the test finishes.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeirenKitTests.SettingsTests.\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suiteName = directory.appendingPathComponent("defaults").path
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         addTeardownBlock {
             UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+            try FileManager.default.removeItem(at: directory)
         }
         return defaults
     }
