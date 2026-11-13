@@ -465,6 +465,7 @@ Sources/
     AudioDevices.swift    Core Audio device + recording-process queries
     MixerEngine.swift     Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
     EQEngine.swift        RBJ-cookbook coefficient math + voice presets
+    Settings.swift        versioned UserDefaults preferences + schema migrations
     ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
   SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler,
                      stream mix bus (gain ramps + limiter)

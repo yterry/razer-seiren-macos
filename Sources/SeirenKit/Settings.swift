@@ -1,11 +1,10 @@
 import Foundation
-import SeirenKit
 
 /// Typed, versioned wrapper over `UserDefaults`. Centralizes the app's settings
 /// keys and migrations so features can add settings without scattering string
 /// keys, and so old installs upgrade cleanly. See docs/CREATOR_DESIGN.md §6.2.
 @MainActor
-final class Settings {
+public final class Settings {
 
     private let defaults: UserDefaults
 
@@ -29,9 +28,9 @@ final class Settings {
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
     /// v3 = lighting keys (absence = "never touched the lights");
     /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic); v6 = mixer (absence = defaults).
-    static let currentSchema = 6
+    public static let currentSchema = 6
 
-    init(_ defaults: UserDefaults = .standard) {
+    public init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
         migrate()
     }
@@ -48,7 +47,7 @@ final class Settings {
             }
         }
         // v1 → v2: EQ keys added; their absence reads as "off / Flat", so there
-        // is nothing to migrate — just record the new schema version.
+        // is nothing to migrate - just record the new schema version.
         // v2 → v3: lighting keys added; absence means "leave the device's
         // lighting alone", so again nothing to migrate.
 
@@ -66,12 +65,12 @@ final class Settings {
 
     // MARK: Monitoring
 
-    var mode: MonitorEngine.Mode {
+    public var mode: MonitorEngine.Mode {
         get { defaults.string(forKey: Key.mode).flatMap(MonitorEngine.Mode.init(rawValue:)) ?? .off }
         set { defaults.set(newValue.rawValue, forKey: Key.mode) }
     }
 
-    var inputPreference: MonitorEngine.InputPreference {
+    public var inputPreference: MonitorEngine.InputPreference {
         get {
             guard let uid = defaults.string(forKey: Key.inputSource), uid != "automatic" else {
                 return .automatic
@@ -86,26 +85,26 @@ final class Settings {
         }
     }
 
-    var inputSourceName: String? {
+    public var inputSourceName: String? {
         get { defaults.string(forKey: Key.inputName) }
         set { defaults.set(newValue, forKey: Key.inputName) }
     }
 
     /// Persisted monitor level, or nil if the user never set one.
-    var level: Float? {
+    public var level: Float? {
         get { defaults.object(forKey: Key.level) == nil ? nil : Float(defaults.double(forKey: Key.level)) }
         set { if let v = newValue { defaults.set(Double(v), forKey: Key.level) } }
     }
 
     // MARK: EQ
 
-    var eqEnabled: Bool {
+    public var eqEnabled: Bool {
         get { defaults.bool(forKey: Key.eqEnabled) }
         set { defaults.set(newValue, forKey: Key.eqEnabled) }
     }
 
     /// The persisted preset, resolved to a built-in (falls back to Flat).
-    var eqPreset: EQPreset {
+    public var eqPreset: EQPreset {
         get {
             let name = defaults.string(forKey: Key.eqPreset) ?? EQPreset.flat.name
             return EQPreset.builtIns.first { $0.name == name } ?? .flat
@@ -113,7 +112,7 @@ final class Settings {
         set { defaults.set(newValue.name, forKey: Key.eqPreset) }
     }
 
-    var noiseSuppression: MonitorEngine.NoiseSuppression {
+    public var noiseSuppression: MonitorEngine.NoiseSuppression {
         get {
             defaults.string(forKey: Key.nsMode)
                 .flatMap(MonitorEngine.NoiseSuppression.init(rawValue:)) ?? .off
@@ -123,12 +122,12 @@ final class Settings {
 
     // MARK: Stream Mixer
 
-    var mixerEnabled: Bool {
+    public var mixerEnabled: Bool {
         get { defaults.bool(forKey: Key.mixerEnabled) }
         set { defaults.set(newValue, forKey: Key.mixerEnabled) }
     }
 
-    var mixerChannels: [MixerEngine.Channel] {
+    public var mixerChannels: [MixerEngine.Channel] {
         get {
             guard let data = defaults.data(forKey: Key.mixerChannels),
                   let channels = try? JSONDecoder().decode([MixerEngine.Channel].self, from: data)
@@ -144,9 +143,9 @@ final class Settings {
 
     // MARK: Lighting
 
-    /// The user's lighting choice, or nil if they never set one — in which case
+    /// The user's lighting choice, or nil if they never set one - in which case
     /// the app must not touch the device's lights at all.
-    var lightingState: LightingState? {
+    public var lightingState: LightingState? {
         get {
             guard defaults.object(forKey: Key.lightEffect) != nil,
                   let effect = ChromaEffect(rawValue: UInt8(clamping: defaults.integer(forKey: Key.lightEffect)))
