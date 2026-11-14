@@ -37,12 +37,10 @@ So the most useful thing you can do is **tell us your model works** (or doesn't)
    (with Seiren FX installed) prints whether the route came up, the buffer
    layout the aggregate produced, and the mic's peak level - that output is
    what to paste in an issue.
-2. **Open an issue / PR** with:
-   - the device **name** as it appears in `seiren-probe` output (this is what the
-     name-match keys on),
-   - **VID/PID** (`ioreg -p IOUSB -l | grep -iE 'idVendor|idProduct'`),
-   - macOS version and `swift --version`,
-   - the full `seiren-probe` dump.
+2. **Open a [device report](https://github.com/yterry/razer-seiren-macos/issues/new?template=device-report.yml)**.
+   The form lists what to include, such as the text from **Copy Diagnostics** in
+   the Seiren menu. If you built from source, add the `seiren-probe` output
+   there too.
 
 ### When a model needs more than the name match
 

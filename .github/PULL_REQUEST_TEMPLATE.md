@@ -1,6 +1,6 @@
 <!--
-Thanks for contributing! Keep PRs small and focused. CI (macos-15, swift build +
-swift test) must be green. See CONTRIBUTING.md.
+Thanks for contributing! Keep PRs small and focused. CI (macos-15, swift build,
+scripts/test-driver.sh, swift test) must be green. See CONTRIBUTING.md.
 -->
 
 ## What this changes
@@ -20,7 +20,7 @@ Closes #
 ## How I tested it
 
 - [ ] `swift build` succeeds
-- [ ] `swift test` passes
+- [ ] `make test` passes (runs `bash scripts/test-driver.sh` and `swift test`)
 - [ ] Smoke-tested `swift run seiren-mac` (if app/engine changed)
 
 **Device(s) tested on** (for anything touching audio/device behavior):
