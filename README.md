@@ -189,7 +189,7 @@ Keep your speakers or headphones selected as the call's output.
   ```
 
 **Upgrading an existing driver:** Seiren FX 3.0 removes the speaker outputs from both visible devices.
-The Voice menu says **Seiren FX needs a one-time reinstall** and offers **Reinstall Seiren FX…**, using the same admin prompt as installation.
+The 🎙 menu says **Seiren FX needs a one-time reinstall** and offers **Reinstall Seiren FX…**, using the same admin prompt as installation.
 Processed voice continues through the old driver's output until you reinstall.
 Your saved Seiren FX and Seiren Stream Mix microphone choices keep working because their UIDs are unchanged.
 Source builds use the build and install commands above.
@@ -235,7 +235,7 @@ What you hear yourself does not change: apps keep playing to your speakers or he
 The mixer runs only while an app is recording Seiren Stream Mix, so macOS's audio-recording indicator is on only while you stream.
 
 - Needs **macOS 14.2** or later (it uses Core Audio process taps) and **Seiren FX 3.0** for microphone-only devices.
-  If you installed an older driver, open **Voice ▸ Reinstall Seiren FX…** (one admin prompt).
+  If you installed an older driver, choose **Reinstall Seiren FX…** in the 🎙 menu (one admin prompt).
   The mixer continues to support the 2.0 driver while you arrange the reinstall.
 - The first time the mixer runs, macOS asks to let Seiren record your computer's audio.
   If you decline, the app channels and Desktop audio stay silent.
@@ -322,17 +322,17 @@ swift build
 
 ## Uninstall
 
-1. Quit the app: click the 🎙 menu → **Quit Seiren**.
-   If you turned on **Launch at Login** in that menu, turn it off first.
-2. Remove the app.
-   If you installed it with Homebrew, run `brew uninstall --cask razer-seiren`.
-   Otherwise drag **Seiren.app** from `/Applications` to the Trash.
-3. Remove the Seiren FX driver, if you installed it.
-   The app has no uninstall action for it yet; from a [source checkout](#building-from-source), run:
+1. Remove the Seiren FX driver, if you installed it: open **🎙 → Voice ▸ Uninstall Seiren FX…**, confirm, and enter your password.
+   Without the app, run this from a [source checkout](#building-from-source) instead:
    ```sh
    sudo scripts/install-driver.sh --uninstall
    ```
-   That deletes `/Library/Audio/Plug-Ins/HAL/SeirenFX.driver` and restarts `coreaudiod`, so all audio on the Mac drops out for about a second.
+   Either way, `/Library/Audio/Plug-Ins/HAL/SeirenFX.driver` is deleted and `coreaudiod` restarts, so all audio on the Mac drops out for about a second.
+2. Quit the app: click the 🎙 menu → **Quit Seiren**.
+   If you turned on **Launch at Login** in that menu, turn it off first.
+3. Remove the app.
+   If you installed it with Homebrew, run `brew uninstall --cask razer-seiren`.
+   Otherwise drag **Seiren.app** from `/Applications` to the Trash.
 4. Remove the preferences:
    ```sh
    defaults delete com.yterry.seiren-mac

@@ -70,6 +70,20 @@ enum DriverInstaller {
         return runPrivileged(shell)
     }
 
+    /// After an install restarts coreaudiod, check `deviceLoaded` every
+    /// `interval` until it returns true (true) or `timeout` has passed (false).
+    static func waitForDevice(timeout: Duration = .seconds(10), interval: Duration = .milliseconds(250),
+                              deviceLoaded: () -> Bool,
+                              sleep: (Duration) async -> Void = { try? await Task.sleep(for: $0) }) async -> Bool {
+        var waited = Duration.zero
+        while true {
+            if deviceLoaded() { return true }
+            if waited >= timeout { return false }
+            await sleep(interval)
+            waited += interval
+        }
+    }
+
     /// Run a shell command with admin rights via osascript. Returns `.cancelled`
     /// if the user dismisses the auth dialog.
     private static func runPrivileged(_ command: String) -> Result {
