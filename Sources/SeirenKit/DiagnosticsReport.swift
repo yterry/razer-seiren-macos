@@ -242,12 +242,18 @@ public enum DiagnosticsReport {
             && device.name.localizedCaseInsensitiveContains("seiren")
     }
 
+    /// Only Seirens and the app's own devices are named, here and in the event
+    /// log; any other name can contain a person's name.
+    package static func showsName(of device: DiagnosticsSnapshot.Device) -> Bool {
+        ownDeviceRoles[device.uid] != nil || isSeiren(device)
+    }
+
     /// Seirens and the app's own devices keep their names; every other device
     /// becomes a transport label such as "Built-in input" or "USB input 1".
     private static func deviceLabels(_ devices: [DiagnosticsSnapshot.Device]) -> [String] {
         var counts: [String: Int] = [:]
         return devices.map { device in
-            if ownDeviceRoles[device.uid] != nil || isSeiren(device) { return device.name }
+            if showsName(of: device) { return device.name }
             let direction = device.inputStreams > 0
                 ? (device.outputStreams > 0 ? "input and output" : "input") : "output"
             let base = "\(transportName(device.transport)) \(direction)"
@@ -257,7 +263,7 @@ public enum DiagnosticsReport {
         }
     }
 
-    private static func transportName(_ transport: UInt32?) -> String {
+    package static func transportName(_ transport: UInt32?) -> String {
         switch transport {
         case kAudioDeviceTransportTypeBuiltIn: return "Built-in"
         case kAudioDeviceTransportTypeUSB: return "USB"

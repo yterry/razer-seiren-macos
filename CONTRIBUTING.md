@@ -83,7 +83,10 @@ in Core Audio instead.
 `SEIREN_DEVICE_MATCH="<name substring>" swift run seiren-mac` points the engine at
 any other input device (an input-only USB interface is a faithful stand-in for a
 jack-less Seiren), and `swift run seiren-probe route 5 --device "<name>"` does
-the same for the probe. `SEIREN_MONITOR_DEBUG=1` logs Auto-mode detection.
+the same for the probe.
+The app logs route, standby, device and power events to the unified log; watch them with
+`log stream --predicate 'subsystem == "com.yterry.seiren-mac"' --level debug`.
+`SEIREN_MONITOR_DEBUG=1` also prints them to stderr.
 
 ## How it works
 

@@ -307,7 +307,9 @@ public final class LightingController {
     /// plugged in" from "this mic has no Chroma lighting" (V3 Mini) and hide
     /// the Lighting controls for the latter instead of leaving them dangling.
     public private(set) var attachedModel: DeviceModel?
-    public private(set) var lastError: LightingError?
+    public private(set) var lastError: LightingError? {
+        didSet { if let lastError { EventLog.shared.log(category: .lighting, message: "error: \(lastError)") } }
+    }
     /// The state to keep asserted, or nil to leave the device untouched.
     public private(set) var desiredState: LightingState?
 

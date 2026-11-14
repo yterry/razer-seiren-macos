@@ -22,6 +22,12 @@ package enum AudioDevices {
         return id == kAudioObjectUnknown ? nil : id
     }
 
+    package static func defaultOutputDevice() -> AudioObjectID? {
+        let id = readUInt32(AudioObjectID(kAudioObjectSystemObject),
+                            kAudioHardwarePropertyDefaultOutputDevice)
+        return id == kAudioObjectUnknown ? nil : id
+    }
+
     package static func candidates() -> [MonitorEngine.Candidate] {
         allDevices().compactMap { dev in
             guard let uid = deviceUID(dev), let name = deviceName(dev) else { return nil }
@@ -64,14 +70,16 @@ package enum AudioDevices {
         for uid in [MonitorEngine.fxFeederUID, MonitorEngine.streamMixFeederUID] {
             if let feeder = device(forUID: uid), !ids.contains(feeder) { ids.append(feeder) }
         }
-        return ids.compactMap { dev in
-            guard let uid = deviceUID(dev), let name = deviceName(dev) else { return nil }
-            return DiagnosticsSnapshot.Device(
-                uid: uid, name: name, transport: transportType(dev),
-                inputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeInput),
-                outputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeOutput),
-                sampleRate: nominalRate(dev))
-        }
+        return ids.compactMap(diagnosticsDevice)
+    }
+
+    package static func diagnosticsDevice(_ dev: AudioObjectID) -> DiagnosticsSnapshot.Device? {
+        guard let uid = deviceUID(dev), let name = deviceName(dev) else { return nil }
+        return DiagnosticsSnapshot.Device(
+            uid: uid, name: name, transport: transportType(dev),
+            inputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeInput),
+            outputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeOutput),
+            sampleRate: nominalRate(dev))
     }
 
     package static func fxDevice() -> AudioObjectID? {
@@ -289,21 +297,6 @@ package enum AudioDevices {
         return AudioObjectHasProperty(AudioObjectID(kAudioObjectSystemObject), &addr)
     }
 
-    /// Set `SEIREN_MONITOR_DEBUG=1` to log Auto-mode detection to stderr.
-    package static let debugAuto = ProcessInfo.processInfo.environment["SEIREN_MONITOR_DEBUG"] != nil
-
-    private static let debugTimestamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return formatter
-    }()
-
-    package static func debugLog(_ message: @autoclosure () -> String) {
-        guard debugAuto else { return }
-        fputs("\(debugTimestamp.string(from: Date())) \(message())\n", stderr)
-    }
-
     /// Apple system processes that "record" from the device for **metering/UI**,
     /// not because you're on a call - so Auto must ignore them or it would stay
     /// on whenever one is active. The Sound settings pane and Control Center both
@@ -359,19 +352,14 @@ package enum AudioDevices {
             let bid = readString(p, kAudioProcessPropertyBundleID)
             let isUs = excluded.contains(pid)
             let isMeteringUI = bid.map(autoIgnoredBundleIDs.contains) ?? false
-            if debugAuto {
-                debugLog("[seiren auto] recording-from-Seiren pid=\(pid) " +
-                      "bundle=\(bid ?? "(no bundle id)") self/ancestor=\(isUs) " +
-                      "meteringUI=\(isMeteringUI)")
-            }
+            EventLog.shared.debug(category: .auto, message: "recording-from-Seiren pid=\(pid) " +
+                "bundle=\(bid ?? "(no bundle id)") self/ancestor=\(isUs) meteringUI=\(isMeteringUI)")
             if isUs || isMeteringUI { continue }   // not a real call → ignore
             found.append(RecordingProcess(pid: pid, bundleID: bid, objectID: p,
                                           inputDeviceIDs: inputs))
         }
-        if debugAuto {
-            debugLog("[seiren auto] -> other app recording from Seiren? \(!found.isEmpty) " +
-                     "(self/ancestors=\(excluded.sorted()))")
-        }
+        EventLog.shared.debug(category: .auto, message: "-> other app recording from Seiren? \(!found.isEmpty) " +
+            "(self/ancestors=\(excluded.sorted()))")
         return found
     }
 

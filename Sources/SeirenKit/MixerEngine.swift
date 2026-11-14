@@ -219,6 +219,8 @@ public final class MixerEngine {
     private var startFailure: StartFailure?
     private var aggregate: AudioObjectID?
     private var proc: AudioDeviceIOProcID?
+    /// AudioDeviceStart succeeded, so teardown stops a running mixer.
+    private var isStarted = false
     private var tapIDs: [AudioObjectID] = []
     private var owners: [AudioObjectID: String?] = [:]   // process object -> owning app
     private var dsp: OpaquePointer?
@@ -341,6 +343,8 @@ public final class MixerEngine {
         }
         guard #available(macOS 14.2, *) else { return }
         guard let ownProcess = AudioDevices.ownProcessObject() else {
+            EventLog.shared.log(category: .mixer, message:
+                "start failed: no process object status=\(kAudioHardwareBadObjectError)")
             teardown(); state = .failed(kAudioHardwareBadObjectError)
             return
         }
@@ -381,8 +385,15 @@ public final class MixerEngine {
         teardown()
         snapshot = current
         let status = start(current)
-        if status == noErr { state = .running }
-        else { teardown(); state = .failed(status) }
+        if status == noErr {
+            isStarted = true
+            EventLog.shared.log(category: .mixer, message:
+                "start: \(channels.count) channels, \(lastDiagnostics.taps.count) taps")
+            state = .running
+        } else {
+            EventLog.shared.log(category: .mixer, message: "start failed: status=\(status)")
+            teardown(); state = .failed(status)
+        }
         startFailure = StartFailure.recording(result: state, snapshot: current,
                                               now: ProcessInfo.processInfo.systemUptime)
     }
@@ -481,6 +492,10 @@ public final class MixerEngine {
     }
 
     private func teardown() {
+        if isStarted {
+            EventLog.shared.log(category: .mixer, message: "stop")
+            isStarted = false
+        }
         if let aggregate, let proc {
             AudioDeviceStop(aggregate, proc)
             AudioDeviceDestroyIOProcID(aggregate, proc)

@@ -292,7 +292,11 @@ public final class MonitorEngine {
     // MARK: Observable state
 
     public private(set) var state: State = .stopped {
-        didSet { if state != oldValue { notify() } }
+        didSet {
+            guard state != oldValue else { return }
+            EventLog.shared.log(category: .engine, message: "state \(oldValue) -> \(state)")
+            notify()
+        }
     }
     public enum InputPreference: Equatable, Sendable {
         case automatic
@@ -316,7 +320,14 @@ public final class MonitorEngine {
         didSet { if availableInputs != oldValue { notify() } }
     }
     public private(set) var activeSource: InputDevice? {
-        didSet { if activeSource != oldValue { notify() } }
+        didSet {
+            guard activeSource != oldValue else { return }
+            let device = activeSource.flatMap { AudioDevices.device(forUID: $0.uid) }
+                .flatMap(AudioDevices.diagnosticsDevice)
+            EventLog.shared.log(category: .engine, message: device.map { "source: \(device: $0)" }
+                ?? (activeSource == nil ? "source: none" : "source: a device that is no longer listed"))
+            notify()
+        }
     }
 
     public var includeStreamMixInTriggers = false {
@@ -358,7 +369,11 @@ public final class MonitorEngine {
     }
 
     public private(set) var mode: Mode = .off {
-        didSet { if mode != oldValue { notify() } }
+        didSet {
+            guard mode != oldValue else { return }
+            EventLog.shared.log(category: .engine, message: "mode \(oldValue.rawValue) -> \(mode.rawValue)")
+            notify()
+        }
     }
 
     /// Monitor gain, 0...1. Applied live to the RT proc and (by the app)
@@ -514,10 +529,17 @@ public final class MonitorEngine {
     /// store it so we can remove exactly what we added on teardown.
     private var devicesListenerBlock: AudioObjectPropertyListenerBlock?
     private var defaultInputListenerBlock: AudioObjectPropertyListenerBlock?
+    private var defaultOutputListenerBlock: AudioObjectPropertyListenerBlock?
+    /// Devices as of the last hotplug event, to name the ones that left.
+    private var knownDevices: [DiagnosticsSnapshot.Device] = []
     private var sampleRateListenerBlock: AudioObjectPropertyListenerBlock?
     private var recorderListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    private var defaultOutputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
     private var recorderAddress = AudioObjectPropertyAddress(
@@ -578,6 +600,12 @@ public final class MonitorEngine {
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultInputAddress, DispatchQueue.main, block)
             defaultInputListenerBlock = nil
+        }
+        if let block = defaultOutputListenerBlock {
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &defaultOutputAddress, DispatchQueue.main, block)
+            defaultOutputListenerBlock = nil
         }
         updateRecorderListeners(devices: [])
         activeSource = nil
@@ -695,7 +723,7 @@ public final class MonitorEngine {
         if dependsOnRecorders {
             let present = !recording.isEmpty
             if present != lastRecorderPresence {
-                AudioDevices.debugLog("[seiren auto] recorder \(present ? "present" : "absent") " +
+                EventLog.shared.log(category: .auto, message: "recorder \(present ? "present" : "absent") " +
                     "processes=\(recordingProcesses?.map { "pid=\($0.pid) bundle=\($0.bundleID ?? "(no bundle id)")" } ?? [])")
                 lastRecorderPresence = present
             }
@@ -735,7 +763,7 @@ public final class MonitorEngine {
     private func reconcileStandby(source: Source?, fxInstalled: Bool, microphoneAccess: MicrophoneAccess) {
         guard Self.shouldRunStandby(mode: mode, source: source, fxInstalled: fxInstalled,
                                     allowed: standbyAllowed && microphoneAccess != .denied), let source else {
-            let reason: String
+            let reason: EventLog.Message
             if mode != .auto { reason = "mode \(mode.rawValue)" }
             else if microphoneAccess == .denied { reason = "microphone access denied" }
             else if !standbyAllowed { reason = "host suspended standby" }
@@ -757,7 +785,7 @@ public final class MonitorEngine {
         var pid: AudioDeviceIOProcID?
         let created = AudioDeviceCreateIOProcID(device.id, standbyIOProc, nil, &pid)
         guard created == noErr, let pid else {
-            AudioDevices.debugLog("[seiren standby] start failed: create IOProc status=\(created)")
+            EventLog.shared.log(category: .standby, message: "start failed: create IOProc status=\(created)")
             return
         }
         let inputCount = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeInput)
@@ -766,27 +794,27 @@ public final class MonitorEngine {
             scope: kAudioObjectPropertyScopeInput, enabled: Array(repeating: false, count: inputCount))
         guard inputs == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            AudioDevices.debugLog("[seiren standby] start refused: could not disable input streams status=\(inputs)")
+            EventLog.shared.log(category: .standby, message: "start refused: could not disable input streams status=\(inputs)")
             return
         }
         let outputs = AudioDevices.setIOProcStreamUsage(device.id, proc: pid,
             scope: kAudioObjectPropertyScopeOutput, enabled: Array(repeating: true, count: outputCount))
         guard outputs == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            AudioDevices.debugLog("[seiren standby] start failed: enable output streams status=\(outputs)")
+            EventLog.shared.log(category: .standby, message: "start failed: enable output streams status=\(outputs)")
             return
         }
         let started = AudioDeviceStart(device.id, pid)
         guard started == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            AudioDevices.debugLog("[seiren standby] start failed: AudioDeviceStart status=\(started)")
+            EventLog.shared.log(category: .standby, message: "start failed: AudioDeviceStart status=\(started)")
             return
         }
         standbyDeviceID = device.id
         standbyDeviceUID = device.uid
         standbyProcID = pid
         isStandbyRunning = true
-        AudioDevices.debugLog("[seiren standby] start: Auto Seiren with FX, host allowed uid=\(device.uid)")
+        EventLog.shared.log(category: .standby, message: "start: Auto Seiren with FX, host allowed uid=\(private: device.uid)")
         validateStandbyInput()
         scheduleStandbyValidation()
     }
@@ -803,7 +831,7 @@ public final class MonitorEngine {
         guard inputs.contains(device) else { return }
         Self.standbyRejectedUIDs.insert(uid)
         stopStandby(reason: "this process now records the Seiren (inputs=\(inputs)); " +
-                    "disabled for process lifetime uid=\(uid)")
+                    "disabled for process lifetime uid=\(private: uid)")
     }
 
     private func scheduleStandbyValidation() {
@@ -820,13 +848,13 @@ public final class MonitorEngine {
         standbyValidationTimer = timer
     }
 
-    private func stopStandby(reason: String) {
+    private func stopStandby(reason: EventLog.Message) {
         standbyValidationTimer?.invalidate()
         standbyValidationTimer = nil
         if let device = standbyDeviceID, let pid = standbyProcID {
             AudioDeviceStop(device, pid)
             AudioDeviceDestroyIOProcID(device, pid)
-            AudioDevices.debugLog("[seiren standby] stop: \(reason)")
+            EventLog.shared.log(category: .standby, message: "stop: " + reason)
         }
         standbyProcID = nil
         standbyDeviceID = nil
@@ -908,7 +936,7 @@ public final class MonitorEngine {
                         return
                     }
                     AudioDeviceDestroyIOProcID(agg, pid)
-                    AudioDevices.debugLog("[seiren route] start failed: createAggregate=\(aggregateMS) ms " +
+                    EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms " +
                         "AudioDeviceStart=\(startMS) ms status=\(started)")
                     if isProbablyPermissionError(started) {
                         AudioHardwareDestroyAggregateDevice(agg)
@@ -917,13 +945,13 @@ public final class MonitorEngine {
                     }
                     fxFailure = started   // non-permission failure → try direct
                 } else {
-                    AudioDevices.debugLog("[seiren route] start failed: create IOProc status=\(created) " +
+                    EventLog.shared.log(category: .route, message: "start failed: create IOProc status=\(created) " +
                         "createAggregate=\(aggregateMS) ms")
                     fxFailure = created
                 }
                 AudioHardwareDestroyAggregateDevice(agg)
             } else {
-                AudioDevices.debugLog("[seiren route] start failed: createAggregate=\(aggregateMS) ms")
+                EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms")
                 fxFailure = kAudioHardwareUnspecifiedError
             }
         }
@@ -945,7 +973,7 @@ public final class MonitorEngine {
         let created = AudioDeviceCreateIOProcID(source, monitorIOProc, nil, &pid)
         guard created == noErr, let pid else {
             state = .failed(created)
-            AudioDevices.debugLog("[seiren route] direct start failed: create IOProc status=\(created)")
+            EventLog.shared.log(category: .route, message: "direct start failed: create IOProc status=\(created)")
             return
         }
         let startTime = mach_absolute_time()
@@ -961,7 +989,7 @@ public final class MonitorEngine {
             AudioDeviceDestroyIOProcID(source, pid)
             state = isProbablyPermissionError(started)
                 ? .permissionDenied : .failed(started)
-            AudioDevices.debugLog("[seiren route] direct start failed: AudioDeviceStart=\(startMS) ms status=\(started)")
+            EventLog.shared.log(category: .route, message: "direct start failed: AudioDeviceStart=\(startMS) ms status=\(started)")
         }
     }
 
@@ -972,8 +1000,7 @@ public final class MonitorEngine {
     }
 
     private func logRouteStart(aggregateMS: Double?, startTime: UInt64, startMS: Double) {
-        guard AudioDevices.debugAuto else { return }
-        AudioDevices.debugLog("[seiren route] start: createAggregate=\(aggregateMS.map { String(format: "%.3f ms", $0) } ?? "n/a (direct)") " +
+        EventLog.shared.log(category: .route, message: "start: createAggregate=\(aggregateMS.map { String(format: "%.3f ms", $0) } ?? "n/a (direct)") " +
             "AudioDeviceStart=\(String(format: "%.3f", startMS)) ms")
         guard isRoutingThroughFX else { return }
         routeStartedAt = startTime
@@ -981,7 +1008,7 @@ public final class MonitorEngine {
             Task { @MainActor in
                 guard let self, self.routeStartedAt == startTime, gDiagFirstInputTime >= startTime else { return }
                 let delay = Self.elapsedMilliseconds(since: startTime, until: gDiagFirstInputTime)
-                AudioDevices.debugLog("[seiren route] first non-zero mic sample: \(String(format: "%.3f", delay)) ms after AudioDeviceStart")
+                EventLog.shared.log(category: .route, message: "first non-zero mic sample: \(String(format: "%.3f", delay)) ms after AudioDeviceStart")
                 self.startupLogTimer?.invalidate()
                 self.startupLogTimer = nil
                 self.routeStartedAt = nil
@@ -1005,7 +1032,7 @@ public final class MonitorEngine {
         if let dev = procDeviceID, let pid = procID {
             AudioDeviceStop(dev, pid)
             AudioDeviceDestroyIOProcID(dev, pid)
-            AudioDevices.debugLog("[seiren route] stop: \(reason)")
+            EventLog.shared.log(category: .route, message: "stop: \(reason)")
         }
         procID = nil
         procDeviceID = nil
@@ -1045,6 +1072,7 @@ public final class MonitorEngine {
         guard procDeviceID == dev, let pid = procID else { return }
         let rate = AudioDevices.nominalRate(dev)
         guard rate != liveSampleRate else { return }
+        EventLog.shared.log(category: .route, message: "sample rate \(Int(liveSampleRate)) -> \(Int(rate)) Hz")
         // The DSP reset touches RT-owned delay lines, so pause the proc while
         // recomputing EQ and gate coefficients and replacing Studio's state.
         let stopped = AudioDeviceStop(dev, pid)
@@ -1082,18 +1110,55 @@ public final class MonitorEngine {
     // MARK: - Hotplug listener
 
     private func installDevicesListenerIfNeeded() {
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            Task { @MainActor in self?.reconcile() }
+        let devicesBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor in
+                self?.logDeviceChanges()
+                self?.reconcile()
+            }
+        }
+        let defaultInputBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor in
+                self?.logDefaultDevice("input", AudioDevices.defaultInputDevice())
+                self?.reconcile()
+            }
+        }
+        // The route never follows the default output; this listener only logs.
+        let defaultOutputBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor in self?.logDefaultDevice("output", AudioDevices.defaultOutputDevice()) }
         }
         let system = AudioObjectID(kAudioObjectSystemObject)
         if devicesListenerBlock == nil,
-           AudioObjectAddPropertyListenerBlock(system, &devicesAddress, DispatchQueue.main, block) == noErr {
-            devicesListenerBlock = block
+           AudioObjectAddPropertyListenerBlock(system, &devicesAddress, DispatchQueue.main, devicesBlock) == noErr {
+            devicesListenerBlock = devicesBlock
+            knownDevices = AudioDevices.diagnosticsDevices()
         }
         if defaultInputListenerBlock == nil,
-           AudioObjectAddPropertyListenerBlock(system, &defaultInputAddress, DispatchQueue.main, block) == noErr {
-            defaultInputListenerBlock = block
+           AudioObjectAddPropertyListenerBlock(system, &defaultInputAddress, DispatchQueue.main,
+                                               defaultInputBlock) == noErr {
+            defaultInputListenerBlock = defaultInputBlock
         }
+        if defaultOutputListenerBlock == nil,
+           AudioObjectAddPropertyListenerBlock(system, &defaultOutputAddress, DispatchQueue.main,
+                                               defaultOutputBlock) == noErr {
+            defaultOutputListenerBlock = defaultOutputBlock
+        }
+    }
+
+    private func logDeviceChanges() {
+        let current = AudioDevices.diagnosticsDevices()
+        for device in knownDevices where !current.contains(where: { $0.uid == device.uid }) {
+            EventLog.shared.log(category: .devices, message: "removed: \(device: device)")
+        }
+        for device in current where !knownDevices.contains(where: { $0.uid == device.uid }) {
+            EventLog.shared.log(category: .devices, message: "added: \(device: device)")
+        }
+        knownDevices = current
+    }
+
+    private func logDefaultDevice(_ direction: String, _ id: AudioObjectID?) {
+        let device = id.flatMap(AudioDevices.diagnosticsDevice)
+        EventLog.shared.log(category: .devices, message: device.map { "default \(direction): \(device: $0)" }
+            ?? "default \(direction): none")
     }
 
     private func updateRecorderListeners(devices: Set<AudioObjectID>) {
