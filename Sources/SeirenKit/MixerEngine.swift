@@ -257,6 +257,12 @@ public final class MixerEngine {
         if changed { notify() }
     }
 
+    /// Clear start backoff and immediately reconsider the mix.
+    public func retryNow() {
+        startFailure = nil
+        reconcile()
+    }
+
     public func setChannels(_ channels: [Channel]) {
         let normalized = Self.normalizedChannels(channels)
         guard normalized != self.channels else { return }
