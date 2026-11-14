@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import IOKit.hid
 import ServiceManagement
 import SeirenKit
 
@@ -297,7 +298,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         menu.addItem(.separator())
 
-        // 6. Quit.
+        // 7. Versions, and a bug report that needs no Swift toolchain.
+        menu.addItem(disabledItem(DiagnosticsReport.versionLine(app: Self.appVersion,
+                                                               installedFX: Self.installedFXVersion)))
+        let copy = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
+        copy.target = self
+        menu.addItem(copy)
+
+        menu.addItem(.separator())
+
+        // 8. Quit.
         let quit = NSMenuItem(title: "Quit Seiren",
                               action: #selector(quit), keyEquivalent: "q")
         quit.target = self
@@ -999,6 +1009,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     @objc private func retryAudio() {
         engine.retryNow()
+    }
+
+    @objc private func copyDiagnostics() {
+        let report = DiagnosticsReport.render(diagnosticsSnapshot())
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+    }
+
+    private func diagnosticsSnapshot() -> DiagnosticsSnapshot {
+        let needsReinstall = engine.fxNeedsReinstall
+        let versions = DiagnosticsSnapshot.Versions(
+            app: Self.appVersion,
+            macOS: ProcessInfo.processInfo.operatingSystemVersionString,
+            architecture: Self.machineArchitecture,
+            installedFX: Self.installedFXVersion,
+            bundledFX: DriverInstaller.bundledVersion,
+            reinstallOffered: needsReinstall,
+            updateOffered: DriverInstaller.isBundled && DriverInstaller.updateAvailable && !needsReinstall)
+        let engineState = DiagnosticsSnapshot.Engine(
+            mode: engine.mode, state: engine.state, inputPreference: engine.inputPreference,
+            activeSource: engine.activeSource, routesThroughFX: engine.isRoutingThroughFX,
+            standbyRunning: engine.isStandbyRunning, route: engine.routeDiagnostics,
+            recordingBundleIDs: engine.recordingBundleIDs)
+        let mixerState = DiagnosticsSnapshot.Mixer(
+            enabled: mixer.isEnabled, availability: mixer.availability, state: mixer.state,
+            channelCount: mixer.channels.count, diagnostics: mixer.diagnostics)
+        let lightingState = DiagnosticsSnapshot.Lighting(
+            attachedModel: lighting.attachedModel?.name, deviceConnected: lighting.deviceConnected,
+            lastError: lighting.lastError)
+        let microphone: String
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: microphone = "authorized"
+        case .denied: microphone = "denied"
+        case .restricted: microphone = "restricted"
+        case .notDetermined: microphone = "not determined"
+        @unknown default: microphone = "unknown"
+        }
+        let inputMonitoring: String
+        switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
+        case kIOHIDAccessTypeGranted: inputMonitoring = "granted"
+        case kIOHIDAccessTypeDenied: inputMonitoring = "denied"
+        default: inputMonitoring = "unknown"
+        }
+        // The event log (#24) does not exist yet, so there is no history to add.
+        return DiagnosticsSnapshot(versions: versions, engine: engineState,
+                                   devices: AudioDevices.diagnosticsDevices(), mixer: mixerState,
+                                   lighting: lightingState, microphoneAccess: microphone,
+                                   inputMonitoringAccess: inputMonitoring, history: [])
+    }
+
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    }
+
+    /// The installed driver's version; nil when it is not installed.
+    static var installedFXVersion: String? {
+        DriverInstaller.installedVersion ?? (DriverInstaller.isInstalled ? "unknown version" : nil)
+    }
+
+    /// The slice that is running, and whether an Intel slice runs under Rosetta.
+    private static var machineArchitecture: String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        var translated: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        let rosetta = sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0 && translated == 1
+        return rosetta ? "x86_64 under Rosetta" : "x86_64"
+        #endif
     }
 
     @objc private func quit() {
