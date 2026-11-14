@@ -1052,7 +1052,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case kIOHIDAccessTypeDenied: inputMonitoring = "denied"
         default: inputMonitoring = "unknown"
         }
-        // The event log (#24) does not exist yet, so there is no history to add.
+        // The event log does not exist yet, so there is no history to add.
         return DiagnosticsSnapshot(versions: versions, engine: engineState,
                                    devices: AudioDevices.diagnosticsDevices(), mixer: mixerState,
                                    lighting: lightingState, microphoneAccess: microphone,

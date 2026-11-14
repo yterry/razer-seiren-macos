@@ -156,7 +156,7 @@ public enum DiagnosticsReport {
         case .automatic: preference = "Automatic"
         case .device(let uid): preference = "Pinned: \(label(uid: uid) ?? "a device that is not connected")"
         }
-        let source = e.activeSource.map { label(uid: $0.uid) ?? ($0.isSeiren ? $0.name : "an unlisted input") }
+        let source = e.activeSource.map { label(uid: $0.uid) ?? "an unlisted input" }
         let r = e.route
         lines += ["Engine",
                   "  Mode: \(e.mode.rawValue)",
@@ -212,7 +212,7 @@ public enum DiagnosticsReport {
                   "",
                   "History"]
         if snapshot.history.isEmpty {
-            lines.append("  No event history recorded (needs #24)")
+            lines.append("  No event history recorded.")
         } else {
             lines += snapshot.history.suffix(historyLimit).map { "  \($0)" }
         }
@@ -236,7 +236,10 @@ public enum DiagnosticsReport {
     }
 
     private static func isSeiren(_ device: DiagnosticsSnapshot.Device) -> Bool {
-        ownDeviceRoles[device.uid] == nil && device.name.localizedCaseInsensitiveContains("seiren")
+        ownDeviceRoles[device.uid] == nil
+            && device.transport != kAudioDeviceTransportTypeAggregate
+            && device.transport != kAudioDeviceTransportTypeVirtual
+            && device.name.localizedCaseInsensitiveContains("seiren")
     }
 
     /// Seirens and the app's own devices keep their names; every other device

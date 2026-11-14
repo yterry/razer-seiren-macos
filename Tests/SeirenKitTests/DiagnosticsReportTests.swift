@@ -40,7 +40,7 @@ final class DiagnosticsReportTests: XCTestCase {
         XCTAssertFalse(positions.contains(nil), "\(positions)")
         XCTAssertEqual(positions.compactMap { $0 }, positions.compactMap { $0 }.sorted())
         XCTAssertTrue(report.contains("  Recording apps: us.zoom.xos"))
-        XCTAssertTrue(report.contains("  No event history recorded (needs #24)"))
+        XCTAssertTrue(report.contains("  No event history recorded."))
     }
 
     func testOtherDevicesAreListedByTransportInsteadOfName() {
@@ -73,10 +73,25 @@ final class DiagnosticsReportTests: XCTestCase {
         XCTAssertTrue(report.contains("  Active source: Bluetooth input 1"))
     }
 
+    func testAggregateOrVirtualDeviceNamedSeirenIsListedByTransport() {
+        let aggregate = device("Alex's Seiren + AirPods", uid: "alex-aggregate",
+                               transport: kAudioDeviceTransportTypeAggregate, outputs: 1)
+        let report = DiagnosticsReport.render(snapshot(
+            devices: [aggregate,
+                      device("Alex's Seiren Loopback", uid: "alex-loopback",
+                             transport: kAudioDeviceTransportTypeVirtual)],
+            activeSource: .init(uid: "unlisted", name: "Alex's Seiren Mic", isSeiren: true)))
+
+        XCTAssertFalse(report.contains("Alex"))
+        XCTAssertTrue(report.contains("  Aggregate input and output 1: Aggregate, 1 in / 1 out streams, 48000 Hz\n"))
+        XCTAssertTrue(report.contains("  Virtual input 1: Virtual, 1 in / 0 out streams, 48000 Hz\n"))
+        XCTAssertTrue(report.contains("  Active source: an unlisted input"))
+    }
+
     func testReportContainsNoHomeDirectoryPath() {
         let report = DiagnosticsReport.render(snapshot(
             devices: [device("/Users/alex/Seiren Loopback", uid: "loop",
-                             transport: kAudioDeviceTransportTypeVirtual)],
+                             transport: kAudioDeviceTransportTypeUSB)],
             history: ["Opened /Users/alex/Applications/Seiren.app", "Driver at /Users/alex/Library/Audio"]))
         XCTAssertFalse(report.contains("/Users/"))
         XCTAssertFalse(report.contains("alex"))
