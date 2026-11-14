@@ -85,6 +85,77 @@ any other input device (an input-only USB interface is a faithful stand-in for a
 jack-less Seiren), and `swift run seiren-probe route 5 --device "<name>"` does
 the same for the probe. `SEIREN_MONITOR_DEBUG=1` logs Auto-mode detection.
 
+## How it works
+
+The app opens the Seiren as a **full-duplex Core Audio device** and installs **one `AudioDeviceIOProc`**.
+On every audio cycle that callback copies the mic input (channel 0) into every headphone output channel, scaled by your level (`0…1`).
+That's the whole monitoring path - input to output, in-process, on the real-time audio thread.
+
+- **Auto start/stop.**
+  The engine listens on `kAudioHardwarePropertyDevices`.
+  When a Seiren appears it starts the IOProc; when it disappears it tears down cleanly (`AudioDeviceStop` + `AudioDeviceDestroyIOProcID`).
+  Your "monitoring on" intent survives unplugging.
+- **Real-time-safe callback.**
+  The IOProc does no allocation, no locks, no Obj-C, no Swift-runtime calls - it just reads samples and writes samples.
+  The level is a single atomically-readable value the UI can change live.
+- **Device match by name.**
+  Any *physical* audio device whose name contains `seiren` (case-insensitive) and has an input stream qualifies, so most Seiren models work with no per-model code.
+  A model with an output stream (headphone jack) gets the monitor; an input-only model (V3 Mini) runs the same IOProc into Seiren FX only - the engine notices the missing output at runtime, so there is no model list to maintain.
+  The app's own virtual devices (Seiren FX, its private aggregate) are excluded even though their names match.
+  With no Seiren connected, the same route runs from another physical input (the Input menu), into Seiren FX only.
+
+The core lives in **`SeirenKit`** (no AppKit, fully testable):
+
+```swift
+let engine = MonitorEngine(deviceNameMatch: "seiren")
+engine.enable()          // find the Seiren, start the IOProc
+engine.level = 0.8       // 0...1, applied live
+engine.disable()         // stop monitoring (intent persists across unplug)
+```
+
+> The reference IOProc is already in the repo - see `swMonProc` / `softwareMonitor()` in [`Sources/seiren-probe/main.swift`](Sources/seiren-probe/main.swift), which you can run today (`swift run seiren-probe monitor swmon 0.9`) to hear the exact path the app uses.
+
+### The latency trade-off, honestly
+
+> **The monitor is *software*.**
+> macOS blocks the route to the Seiren's *hardware* sidetone (every hardware path is blocked or silent - see [Why software monitoring?](docs/HARDWARE_SIDETONE.md#why-software-monitoring-the-hardware-sidetone-path-macos-blocks)), so the app runs one full-duplex Core Audio loop that copies mic → headphone in userspace.
+> The EQ/denoise add nothing to this direct-monitor path (Studio denoise applies only to the broadcast).
+> It is not a sample-accurate DAW monitor.
+
+Monitoring delay ≈ one audio I/O buffer.
+At a typical 256-frame buffer / 48 kHz that's ~5 ms each way; you can lower it with `kAudioDevicePropertyBufferFrameSize` at the cost of CPU and stability.
+For *hearing your own voice* this is fine - it's well under the threshold where you'd notice an echo.
+It is **not** a zero-latency hardware path (which, again, macOS won't give us here), so it isn't the right tool for sample-accurate latency-free DAW monitoring.
+
+## Architecture
+
+```
+Sources/
+  SeirenKit/         model-independent core (no AppKit, fully testable)
+    MonitorEngine.swift   IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
+    AudioDevices.swift    Core Audio device + recording-process queries
+    MixerEngine.swift     Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
+    EQEngine.swift        RBJ-cookbook coefficient math + voice presets
+    Settings.swift        versioned UserDefaults preferences + schema migrations
+    ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
+  SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler,
+                     stream mix bus (gain ramps + limiter)
+  RNNoise/           vendored xiph/rnnoise (BSD-3) — the "Studio" denoiser
+  seiren-mac/        the menu-bar agent (main.swift + AppDelegate): 🎙 menu —
+                     modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
+                     Stream Mixer ▸, Seiren FX install
+  seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
+Driver/SeirenFX/     the loopback virtual audio devices, Seiren FX and Seiren
+                     Stream Mix (AudioServerPlugIn)
+docs/
+  HARDWARE_SIDETONE.md  why hardware sidetone isn't reachable on macOS
+  PROTOCOL.md           device topology + the (EQ/DSP) HID protocol notes
+devices/             example/contributed device metadata (data, not code)
+```
+
+Supporting another Seiren is **usually zero code** - the name match catches it.
+See [How support for other Seiren / Razer mics works](#how-support-for-other-seiren--razer-mics-works).
+
 ## Code style & rules
 
 - **Keep `SeirenKit` AppKit-free.** No `import AppKit`/`UIKit` in the library — it

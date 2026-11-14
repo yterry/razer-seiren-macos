@@ -39,32 +39,17 @@ are — this is the fix.
 
 ## Supported microphones
 
-| Model | Hear yourself | EQ + noise suppression | Lighting |
-|---|---|---|---|
-| **Seiren V3 Pro** | ✅ headphone jack | ✅ via Seiren FX | ✅ 12-LED Chroma ring |
-| **Seiren V3 Mini** | - no headphone jack | ✅ via Seiren FX | - mute LED only |
-| Other Seirens | if it has a jack | ✅ via Seiren FX | - |
+| Model | Status | Hear yourself | EQ + noise suppression | Lighting |
+|---|---|---|---|---|
+| **Seiren V3 Pro** | verified on hardware | ✅ headphone jack | ✅ via Seiren FX | ✅ 12-LED Chroma ring |
+| **Seiren V3 Mini** | verified with a stand-in device | - no headphone jack | ✅ via Seiren FX | - mute LED only |
+| Other Seirens | untested | if it has a jack | ✅ via Seiren FX | - |
 
-Any mic macOS sees as a USB audio device whose name contains "Seiren" is picked
-up automatically - no per-model code. A model with a headphone jack gets
-monitoring; every model gets the EQ and noise suppression, delivered to other
-apps through **Seiren FX**.
+No V3 Mini has been tested on a Mac yet: its support was tested with another input-only audio device ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#11-razer-seiren-v3-mini-from-its-usb-descriptors)).
+**A model not in the table** gets the audio features if macOS names the device with "Seiren" (monitoring needs a headphone jack), and no lighting.
+If you try one, please [report how it went](https://github.com/yterry/razer-seiren-macos/issues/new/choose).
 
-**Unplugged the Seiren mid-call?** Apps recording Seiren FX keep hearing you.
-With no Seiren connected, the app feeds Seiren FX from your Mac's default mic
-instead, with the same EQ and noise suppression, and switches back as soon as the
-Seiren returns.
-See [When the Seiren is unplugged](#when-the-seiren-is-unplugged-input).
-
-**Seiren V3 Mini owners:** the Mini has no headphone jack, so there is nothing
-to monitor into - the app's job for it is the **EQ + noise suppression**, sent to
-OBS / Zoom / Discord through Seiren FX. The menu says so the first time
-("This mic has no headphone jack - it works through Seiren FX") and offers the
-one-time install; the volume slider and Lighting menu don't apply to the Mini
-and stay out of the way. Confirm the route from the terminal with
-`swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
-
-## Install & run
+## Install
 
 Seiren.app runs on macOS 13 or later, on both Apple silicon and Intel Macs.
 
@@ -76,126 +61,106 @@ brew trust yterry/tap          # one-time: Homebrew 6 gates third-party taps
 brew install --cask razer-seiren
 ```
 
-That installs **Seiren.app** to `/Applications`. Update to the latest release any
-time with:
+That installs **Seiren.app** to `/Applications`.
+Update to the latest release any time with:
 
 ```sh
 brew update && brew upgrade --cask razer-seiren
 ```
 
-Releases from **v1.1.0** on are **signed with an Apple Developer ID and
-notarized**, so the app opens with no Gatekeeper friction at all - each
-release's notes state its signing status. (Installing the older v1.0.0? That
-build predates the Developer ID - the cask clears its Gatekeeper quarantine
-flag for you, so it still launches with no manual bypass.)
+Releases from **v1.1.0** on are **signed with an Apple Developer ID and notarized**, so the app opens with no Gatekeeper friction at all - each release's notes state its signing status.
+(Installing the older v1.0.0?
+That build predates the Developer ID - the cask clears its Gatekeeper quarantine flag for you, so it still launches with no manual bypass.)
 
-> The `brew trust` line is a one-time approval for a third-party tap — Homebrew 6+
-> requires it for any tap outside the official repos (older Homebrew ignores it
-> harmlessly). Skip it and you'll see *"Refusing to load cask … from untrusted
-> tap"*; just run it once and retry.
+> The `brew trust` line is a one-time approval for a third-party tap - Homebrew 6+ requires it for any tap outside the official repos (older Homebrew ignores it harmlessly).
+> Skip it and you'll see *"Refusing to load cask … from untrusted tap"*; just run it once and retry.
 
-That gets you **headphone monitoring** right away. To unlock the **EQ and noise
-suppression** — and send the *processed* voice to other apps — open
-**🎙 → Voice ▸ Install Seiren FX…** once; it installs the bundled audio device and
-asks for your password (a one-time admin prompt). See
-[Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
+That gets you **headphone monitoring** right away.
+To unlock the **EQ and noise suppression** - and send the *processed* voice to other apps - open **🎙 → Voice ▸ Install Seiren FX…** once; it installs the bundled audio device and asks for your password (a one-time admin prompt).
+See [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
 
 ### Option B — download the app (no Xcode needed)
 
 1. Grab `Seiren-<version>.zip` from the [latest release](https://github.com/yterry/razer-seiren-macos/releases/latest) and unzip it.
-2. Move **Seiren.app** to `/Applications` and double-click it. Releases from
-   **v1.1.0** on are signed and notarized, so it just opens - no Gatekeeper
-   dance. (Only the old **v1.0.0** build was unsigned; if you need it, clear it
-   once via **System Settings → Privacy & Security → Open Anyway**, or
-   `xattr -dr com.apple.quarantine /Applications/Seiren.app`.)
-3. **To process what other apps record** (EQ + noise suppression in OBS / Zoom /
-   Discord), open the 🎙 menu → **Voice ▸ Install Seiren FX…** and enter your
-   password once — that installs the bundled virtual audio device. Then pick
-   **Seiren FX** as the mic in those apps. (Headphone monitoring works without
-   this; the EQ and denoise need it — see
-   [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).)
+2. Move **Seiren.app** to `/Applications` and double-click it.
+   Releases from **v1.1.0** on are signed and notarized, so it just opens - no Gatekeeper dance.
+   (Only the old **v1.0.0** build was unsigned; if you need it, clear it once via **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/Seiren.app`.)
+3. **To process what other apps record** (EQ + noise suppression in OBS / Zoom / Discord), open the 🎙 menu → **Voice ▸ Install Seiren FX…** and enter your password once - that installs the bundled virtual audio device.
+   Then pick **Seiren FX** as the mic in those apps.
+   (Headphone monitoring works without this; the EQ and denoise need it - see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).)
 
-### Option C — build from source
+To build the app yourself, see [Building from source](#building-from-source).
 
-**Requirements:** macOS 13+ and a **Swift 6 toolchain** (full **Xcode 16+**
-recommended — see [Troubleshooting](#troubleshooting) for why Command-Line-Tools-only
-can fail).
+### Is it safe?
 
-```sh
-git clone https://github.com/yterry/razer-seiren-macos.git && cd razer-seiren-macos
-swift build -c release
-.build/release/seiren-mac          # a 🎙 icon appears in the menu bar
-```
+Releases from **v1.1.0** on are **signed with an Apple Developer ID and notarized by Apple**, so Gatekeeper opens them cleanly - no bypass, no warnings.
+If you'd rather not trust a prebuilt binary anyway, [build it from source](#building-from-source) - the whole app is this repo, no dependencies.
+Released zips ship with a **SHA-256 checksum** so you can verify the download.
+(The old **v1.0.0** build predates the Developer ID and is unsigned; its one-time **Open Anyway** instructions live in that release's notes, and the Homebrew cask clears its quarantine flag automatically.)
 
-Then:
+## First run
 
-1. Plug headphones into the **Seiren's** headphone jack (not the Mac's). (V3
-   Mini: no jack - skip this; your route is Seiren FX, below.)
-2. Click the 🎙 menu and pick a **mode** (see below).
-3. The **first** time, macOS asks for **Microphone** permission — click **Allow**
-   (the app reads the mic to monitor, EQ, and denoise your voice). If you miss the
-   prompt, grant it in **System Settings → Privacy & Security → Microphone**.
-4. Speak. You should hear yourself in the headphones. Drag the **Level** slider to
-   taste.
+1. Open **Seiren** from `/Applications` (or run `.build/release/seiren-mac` from a [source build](#building-from-source)).
+   A 🎙 icon appears in the menu bar; that menu is the whole app, with no Dock icon.
+2. Plug headphones into the **Seiren's** headphone jack (not the Mac's).
+   Monitoring routes mic → *Seiren's* output.
+   (V3 Mini: no jack - skip this; your route is Seiren FX, see [V3 Mini](#v3-mini).)
+3. Click the 🎙 menu and pick a **mode** (see [Monitoring modes](#monitoring-modes)).
+4. The **first** time, macOS asks for **Microphone** permission - click **Allow** (the app reads the mic to monitor, EQ, and denoise your voice).
+   If you miss the prompt, the menu says **Microphone access is required** and offers **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone** for you.
+5. Speak.
+   You should hear yourself in the headphones.
+   Drag the **Level** slider to taste.
 
-That's it — your choice is remembered, auto-starts when you plug the Seiren back
-in, and quietly waits when it's unplugged. Then shape and clean your voice under
-**🎙 → Voice**, and install **Seiren FX** to send the processed voice to other apps
-(see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx)).
+That's it - your choice is remembered, auto-starts when you plug the Seiren back in, and quietly waits when it's unplugged.
+Then shape and clean your voice under **🎙 → Voice**, and install **Seiren FX** to send the processed voice to other apps (see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx)).
 
 ### Monitoring modes
 
-- **On — always**: monitor whenever the Seiren is connected. Simple, but the
-  macOS recording indicator (orange dot) stays on the whole time — because
-  software monitoring keeps the mic open.
-- **Auto — only while an app uses the mic** *(recommended)*: monitor **only when
-  another app is recording from the Seiren** — i.e. while you're on a Zoom/Teams
-  call. The recording indicator is then on **only during calls**, when it would
-  already be on anyway, and you're not "always recording" the rest of the day.
-  *(Uses the macOS 14+ per-process audio API; on older macOS it behaves like
-  "On — always".)*
+- **On — always**: monitor whenever the Seiren is connected.
+  Simple, but the macOS recording indicator (orange dot) stays on the whole time - because software monitoring keeps the mic open.
+- **Auto — only while an app uses the mic** *(recommended)*: monitor **only when another app is recording from the Seiren** - i.e. while you're on a Zoom/Teams call.
+  The recording indicator is then on **only during calls**, when it would already be on anyway, and you're not "always recording" the rest of the day.
+  *(Uses the macOS 14+ per-process audio API; on older macOS it behaves like "On — always".)*
   So your first words aren't cut off, Auto keeps the Seiren's headphone side running silently while you're at the Mac.
   When an app starts recording, the mic is already awake and your voice reaches the app in under a tenth of a second, instead of about a quarter of a second from cold.
   This doesn't record anything or turn on the recording indicator, and it pauses while the display or the Mac sleeps.
   The V3 Mini has no headphone side, so it still starts from cold.
 - **Off**: not monitoring.
 
+### V3 Mini
+
+The Mini has no headphone jack, so there is nothing to monitor into - the app's job for it is the **EQ + noise suppression**, sent to OBS / Zoom / Discord through Seiren FX.
+The menu says so the first time ("This mic has no headphone jack - it works through Seiren FX") and offers the one-time install; the volume slider and Lighting menu don't apply to the Mini and stay out of the way.
+Confirm the route from the terminal with `swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
+
+## Features
+
 ### When the Seiren is unplugged (Input)
 
-Once Zoom, Discord, or OBS records **Seiren FX**, unplugging the Seiren used to
-leave them silent until you noticed and switched mics.
+Once Zoom, Discord, or OBS records **Seiren FX**, unplugging the Seiren used to leave them silent until you noticed and switched mics.
 Now Seiren FX keeps carrying your voice from another mic:
 
-- **🎙 → Input ▸ Automatic** (the default) uses your Seiren whenever one is
-  connected.
-  Without one, it uses your Mac's default input (never Seiren FX itself), then
-  the built-in mic, and switches back the moment the Seiren returns.
+- **🎙 → Input ▸ Automatic** (the default) uses your Seiren whenever one is connected.
+  Without one, it uses your Mac's default input (never Seiren FX itself), then the built-in mic, and switches back the moment the Seiren returns.
 - Pick a specific mic under **Input ▸** to process that one instead.
   While it is unplugged, Automatic takes over.
-- Another mic runs only while an app records from Seiren FX, in both
-  **On — always** and **Auto**, so the macOS recording indicator stays off the
-  rest of the time.
+- Another mic runs only while an app records from Seiren FX, in both **On — always** and **Auto**, so the macOS recording indicator stays off the rest of the time.
   The first line of the menu says which mic Seiren FX is using.
-- Another mic gets the EQ and noise suppression but no headphone monitoring:
-  hearing yourself needs the Seiren's own headphone jack.
+- Another mic gets the EQ and noise suppression but no headphone monitoring: hearing yourself needs the Seiren's own headphone jack.
 
-This needs Seiren FX installed (see below), because Seiren FX is how other apps
-receive the processed voice, and macOS 14 or later, which can tell the app when
-another app starts recording.
+This needs Seiren FX installed (see below), because Seiren FX is how other apps receive the processed voice, and macOS 14 or later, which can tell the app when another app starts recording.
 On macOS 13 only a Seiren is used, as before.
-Automatic never picks a line-level input such as a capture card, unless it is
-your Mac's default input.
+Automatic never picks a line-level input such as a capture card, unless it is your Mac's default input.
 
 ### Voice EQ — and making other apps hear it (Seiren FX)
 
-The app includes a **parametric voice EQ** with built-in presets —
-**Flat / Podcast / Studio / Broadcast**. Turn it on under **🎙 → Voice ▸
-Equalizer** and pick a preset.
+The app includes a **parametric voice EQ** with built-in presets - **Flat / Podcast / Studio / Broadcast**.
+Turn it on under **🎙 → Voice ▸ Equalizer** and pick a preset.
 
-**What other apps hear — please read this.** By default macOS hands every app the
-Seiren's *raw* hardware mic; there's no system hook to insert effects into it. So
-the EQ reaches other apps (OBS, Zoom, Discord, QuickTime…) only through a small
-**virtual audio device** named **Seiren FX** that the app installs:
+**What other apps hear - please read this.**
+By default macOS hands every app the Seiren's *raw* hardware mic; there's no system hook to insert effects into it.
+So the EQ reaches other apps (OBS, Zoom, Discord, QuickTime…) only through a small **virtual audio device** named **Seiren FX** that the app installs:
 
 ```
 Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling app
@@ -207,20 +172,16 @@ The app sends audio through hidden output-only feeders that share each microphon
 Keep your speakers or headphones selected as the call's output.
 
 - **Your headphone monitor reflects the EQ** whenever you're monitoring through Seiren FX.
-- **Other apps hear the EQ only if you pick “Seiren FX” as their microphone.** If
-  an app still points at “Razer Seiren V3 Pro” (or “V3 Mini”), it records the
-  raw, un-EQ'd mic.
-- **On a jack-less mic (V3 Mini) Seiren FX is the whole feature**: with no
-  headphone output there is nothing to monitor into, so until the driver is
-  installed the menu reads “needs Seiren FX” and nothing runs. Once installed,
-  **On — always** keeps the processed voice flowing to Seiren FX whenever the
-  mic is plugged in; **Auto** does it only while an app records from the mic or
-  from Seiren FX.
+- **Other apps hear the EQ only if you pick “Seiren FX” as their microphone.**
+  If an app still points at “Razer Seiren V3 Pro” (or “V3 Mini”), it records the raw, un-EQ'd mic.
+- **On a jack-less mic (V3 Mini) Seiren FX is the whole feature**: with no headphone output there is nothing to monitor into, so until the driver is installed the menu reads “needs Seiren FX” and nothing runs.
+  Once installed, **On — always** keeps the processed voice flowing to Seiren FX whenever the mic is plugged in; **Auto** does it only while an app records from the mic or from Seiren FX.
 
 **Install the Seiren FX driver (one-time):**
 
-- **Downloaded the app?** Open **🎙 → Voice ▸ Install Seiren FX…** and enter your
-  password once. That's it.
+- **Downloaded the app?**
+  Open **🎙 → Voice ▸ Install Seiren FX…** and enter your password once.
+  That's it.
 - **Building from source?** Run:
   ```sh
   scripts/build-driver.sh             # builds dist/SeirenFX.driver (clang, no Xcode)
@@ -233,94 +194,163 @@ Processed voice continues through the old driver's output until you reinstall.
 Your saved Seiren FX and Seiren Stream Mix microphone choices keep working because their UIDs are unchanged.
 Source builds use the build and install commands above.
 
-It's an MIT-licensed CoreAudio plug-in (`AudioServerPlugIn`) — no kext, no
-entitlements. The copy bundled in releases is signed alongside the app; a local
-build is ad-hoc signed, which is all a local install needs. Remove it with
-`sudo scripts/install-driver.sh --uninstall`.
+It's an MIT-licensed CoreAudio plug-in (`AudioServerPlugIn`) - no kext, no entitlements.
+The copy bundled in releases is signed alongside the app; a local build is ad-hoc signed, which is all a local install needs.
+To remove it, see [Uninstall](#uninstall).
 
-Then, in the app you record or stream with, **select “Seiren FX” as the
-microphone**. The app bridges the Seiren and Seiren FX under one clock (a
-private aggregate device), so there's no drift. Without the driver installed, the
-Voice menu says so and the app still does plain headphone monitoring as before.
+Then, in the app you record or stream with, **select “Seiren FX” as the microphone**.
+The app bridges the Seiren and Seiren FX under one clock (a private aggregate device), so there's no drift.
+Without the driver installed, the Voice menu says so and the app still does plain headphone monitoring as before.
 
 ### Noise suppression
 
-Under **🎙 → Voice ▸ Noise suppression** (creator path — needs Seiren FX):
+Under **🎙 → Voice ▸ Noise suppression** (creator path - needs Seiren FX):
 
-- **Reduce noise (gate)** — a zero-latency downward gate that mutes room hiss /
-  keyboard *between words* and opens instantly on speech. No latency, no model
-  download — but, like the EQ, it runs on the Seiren FX route.
-- **Studio Denoise (RNNoise)** — a neural denoiser that strips *steady*
-  background noise (fan, AC, hum, computer) while you talk. Best quality. It adds
-  ~10 ms of latency, but **only on the SeirenFX broadcast** — your **headphone
-  monitor stays low-latency** (it gets gate + EQ, not Studio), so hearing
-  yourself never feels laggy. Runs at 48 / 96 kHz.
+- **Reduce noise (gate)** - a zero-latency downward gate that mutes room hiss / keyboard *between words* and opens instantly on speech.
+  No latency, no model download - but, like the EQ, it runs on the Seiren FX route.
+- **Studio Denoise (RNNoise)** - a neural denoiser that strips *steady* background noise (fan, AC, hum, computer) while you talk.
+  Best quality.
+  It adds ~10 ms of latency, but **only on the SeirenFX broadcast** - your **headphone monitor stays low-latency** (it gets gate + EQ, not Studio), so hearing yourself never feels laggy.
+  Runs at 48 / 96 kHz.
 
-When you monitor through Seiren FX, the EQ and the gate are heard in your monitor
-**and** by apps recording **Seiren FX**; Studio denoise applies to the Seiren FX
-broadcast only.
+When you monitor through Seiren FX, the EQ and the gate are heard in your monitor **and** by apps recording **Seiren FX**; Studio denoise applies to the Seiren FX broadcast only.
 
 ### Stream Mixer
 
-The Stream Mixer builds one audio source for your stream: your processed voice
-plus the audio of your other apps, each at its own level, in a second virtual
-device named **Seiren Stream Mix**.
-In OBS (or Discord Go Live, Twitch Studio, a browser studio), pick
-**Seiren Stream Mix** as the mic and you get the whole mix in one source.
+The Stream Mixer builds one audio source for your stream: your processed voice plus the audio of your other apps, each at its own level, in a second virtual device named **Seiren Stream Mix**.
+In OBS (or Discord Go Live, Twitch Studio, a browser studio), pick **Seiren Stream Mix** as the mic and you get the whole mix in one source.
 It is the Mac counterpart of Synapse's Stream Mixer.
 
 Open **🎙 → Stream Mixer ▸** and check **Mix into Seiren Stream Mix**:
 
-- **Voice** is the same processed voice apps get from Seiren FX (EQ, noise
-  suppression), so monitoring has to be **On** or **Auto**.
+- **Voice** is the same processed voice apps get from Seiren FX (EQ, noise suppression), so monitoring has to be **On** or **Auto**.
 - **Desktop audio** is every app that has no channel of its own.
-- **Add App ▸** gives an app its own channel (up to 6), so you can turn the music
-  down without touching the game.
+- **Add App ▸** gives an app its own channel (up to 6), so you can turn the music down without touching the game.
   **Remove App ▸** puts it back into Desktop audio.
 - Each channel has a slider and a mute button.
   Both work while the menu stays open and apply instantly.
   A limiter on the mix keeps a loud game plus your voice from clipping.
 
-What you hear yourself does not change: apps keep playing to your speakers or
-headphones as usual, and the faders only shape what the stream gets.
-The mixer runs only while an app is recording Seiren Stream Mix, so macOS's
-audio-recording indicator is on only while you stream.
+What you hear yourself does not change: apps keep playing to your speakers or headphones as usual, and the faders only shape what the stream gets.
+The mixer runs only while an app is recording Seiren Stream Mix, so macOS's audio-recording indicator is on only while you stream.
 
 - Needs **macOS 14.2** or later (it uses Core Audio process taps) and **Seiren FX 3.0** for microphone-only devices.
   If you installed an older driver, open **Voice ▸ Reinstall Seiren FX…** (one admin prompt).
   The mixer continues to support the 2.0 driver while you arrange the reinstall.
-- The first time the mixer runs, macOS asks to let Seiren record your computer's
-  audio.
+- The first time the mixer runs, macOS asks to let Seiren record your computer's audio.
   If you decline, the app channels and Desktop audio stay silent.
-  Turn it on later under **System Settings → Privacy & Security → Screen &
-  System Audio Recording**.
-- Safari plays web audio from shared WebKit processes, so a Safari channel also
-  picks up web audio from other apps built on WebKit (Mail, for example).
+  Turn it on later under **System Settings → Privacy & Security → Screen & System Audio Recording**.
+- Safari plays web audio from shared WebKit processes, so a Safari channel also picks up web audio from other apps built on WebKit (Mail, for example).
 - Keep OBS's audio monitoring off for the Seiren Stream Mix source.
-  The mixer already leaves out any app that records the mix, so it can't loop
-  back, but monitoring the source would play every app a second time, slightly
-  delayed, in your headphones.
+  The mixer already leaves out any app that records the mix, so it can't loop back, but monitoring the source would play every app a second time, slightly delayed, in your headphones.
 
 ### Lighting
 
-The V3 Pro's ring of 12 RGB LEDs is fully controllable from the app - no Synapse,
-no Windows. (The V3 Mini has no Chroma zone - only a red/green mute LED - so the
-Lighting menu is hidden while a Mini is the attached mic, and the app never
-writes to its HID channel.)
-Open **🎙 → Lighting ▸** and pick **Spectrum** (the device default), **Breathing**,
-**Wave**, a **Static** color (nine-color palette), or **Off**, and set
-**Brightness** with the slider.
-Your choice is remembered and re-applied whenever the mic reconnects, because the
-hardware forgets its lighting state on unplug.
+The V3 Pro's ring of 12 RGB LEDs is fully controllable from the app - no Synapse, no Windows.
+(The V3 Mini has no Chroma zone - only a red/green mute LED - so the Lighting menu is hidden while a Mini is the attached mic, and the app never writes to its HID channel.)
+Open **🎙 → Lighting ▸** and pick **Spectrum** (the device default), **Breathing**, **Wave**, a **Static** color (nine-color palette), or **Off**, and set **Brightness** with the slider.
+Your choice is remembered and re-applied whenever the mic reconnects, because the hardware forgets its lighting state on unplug.
 
-- The first lighting change prompts for **Input Monitoring** permission - that is
-  how macOS gates the mic's HID control channel (grant it later under **System
-  Settings → Privacy & Security → Input Monitoring** if you miss the prompt).
-  The audio features never need this, and until you touch Lighting the app
-  leaves the device's lights (and that permission) completely alone.
+- The first lighting change prompts for **Input Monitoring** permission - that is how macOS gates the mic's HID control channel (grant it later under **System Settings → Privacy & Security → Input Monitoring** if you miss the prompt).
+  The audio features never need this, and until you touch Lighting the app leaves the device's lights (and that permission) completely alone.
 - CLI equivalent for scripting and diagnostics: `swift run seiren-probe lighting`.
-- How the protocol was recovered from Synapse's own lighting engine (no USB
-  capture involved): [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §5.
+- How the protocol was recovered from Synapse's own lighting engine (no USB capture involved): [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §5.
+
+### Why monitoring is software
+
+macOS blocks every route to the Seiren's hardware sidetone, so the app copies the mic to your headphones itself, which adds about one audio buffer (a few milliseconds) of delay.
+The details are in [How it works](CONTRIBUTING.md#how-it-works), [the latency trade-off](CONTRIBUTING.md#the-latency-trade-off-honestly), [Architecture](CONTRIBUTING.md#architecture), and [Why software monitoring?](docs/HARDWARE_SIDETONE.md#why-software-monitoring-the-hardware-sidetone-path-macos-blocks).
+
+### Heads-up / caveats
+
+- **Software monitoring, small latency.**
+  ≈ one audio buffer (a few ms).
+  Great for hearing yourself; not a zero-latency hardware monitor.
+  See [the latency trade-off](CONTRIBUTING.md#the-latency-trade-off-honestly).
+- **Needs Microphone permission (TCC).**
+  The app reads the mic to monitor, EQ, denoise, and route your voice, so macOS prompts for **Microphone** access the first time.
+  Without it, nothing can start and the menu will say so.
+- **Creator features need Seiren FX.**
+  The EQ and noise suppression reach your monitor and other apps only through the bundled **Seiren FX** device - install it once from **Voice ▸**.
+  Plain headphone monitoring works without it.
+- **The Stream Mixer needs macOS 14.2+ and system-audio permission (TCC).**
+  It reads other apps' audio through Core Audio process taps; macOS asks the first time the mixer runs.
+- **Lighting needs Input Monitoring (TCC).**
+  The Chroma ring is driven over the mic's HID channel, which macOS gates behind **Input Monitoring**.
+  The app only asks when you first use Lighting.
+- **Old builds (v1.0.0 and earlier) are unsigned.**
+  Current releases are signed and notarized; only the old builds need the one-time Gatekeeper bypass.
+- **Headphones go in the Seiren, not the Mac.**
+  Monitoring routes mic → *Seiren's* output.
+  Plug your headphones into the mic.
+- **V3 Mini: no monitoring, no lighting.**
+  It has no headphone jack and no Chroma zone.
+  It gets the EQ + noise suppression through Seiren FX, which is the feature its owners ask for.
+
+## Troubleshooting
+
+**`Invalid manifest … Undefined symbols … PackageDescription.Package.__allocating_init`**
+
+`Package.swift` can't link against your toolchain's `PackageDescription`.
+This almost always means **only the Command Line Tools are installed (no full Xcode)**, or `xcode-select` points at a stale/partial CLT.
+Fix it:
+
+```sh
+xcode-select -p          # if this prints /Library/Developer/CommandLineTools, that's the problem
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+swift --version          # should report Swift 6.x
+swift build
+```
+
+**Monitoring won't turn on / I hear nothing.**
+
+- Confirm **Microphone** permission is granted (System Settings → Privacy & Security → Microphone).
+- Confirm the Seiren is selected as a usable device - `swift run seiren-probe` should list a device whose name contains "Seiren".
+- Confirm your headphones are in the **Seiren's** jack, not the Mac's.
+
+**Apps on Seiren FX hear my Mac's mic instead of the Seiren.**
+
+- The app didn't find the Seiren, so Automatic fell back to another mic (the menu's first line names it).
+  `swift run seiren-probe inputs` lists every input and which one Automatic picks; the Seiren must appear there as eligible.
+- Check that **Input ▸** is set to **Automatic** or to the Seiren.
+
+**V3 Mini: the menu says “needs Seiren FX” / apps record a flat mic.**
+
+- The Mini has no jack, so everything runs through Seiren FX: install it from **Voice ▸ Install Seiren FX…**, set the mode to **On — always**, then pick **Seiren FX** as the microphone in the app you record with.
+- `swift run seiren-probe route` runs the real engine for 5 s and prints whether the route is live, the buffer layout, and the mic's peak level.
+  A peak of “silence” with the route live usually means the mic is muted (the tap-to-mute LED is red).
+
+## Uninstall
+
+1. Quit the app: click the 🎙 menu → **Quit Seiren**.
+   If you turned on **Launch at Login** in that menu, turn it off first.
+2. Remove the app.
+   If you installed it with Homebrew, run `brew uninstall --cask razer-seiren`.
+   Otherwise drag **Seiren.app** from `/Applications` to the Trash.
+3. Remove the Seiren FX driver, if you installed it.
+   The app has no uninstall action for it yet; from a [source checkout](#building-from-source), run:
+   ```sh
+   sudo scripts/install-driver.sh --uninstall
+   ```
+   That deletes `/Library/Audio/Plug-Ins/HAL/SeirenFX.driver` and restarts `coreaudiod`, so all audio on the Mac drops out for about a second.
+4. Remove the preferences:
+   ```sh
+   defaults delete com.yterry.seiren-mac
+   ```
+   If you added your own device files, also delete `~/Library/Application Support/seiren-mac`.
+
+## Building from source
+
+**Requirements:** macOS 13+ and a **Swift 6 toolchain** (full **Xcode 16+** recommended - see [Troubleshooting](#troubleshooting) for why Command-Line-Tools-only can fail).
+
+```sh
+git clone https://github.com/yterry/razer-seiren-macos.git && cd razer-seiren-macos
+swift build -c release
+.build/release/seiren-mac          # a 🎙 icon appears in the menu bar
+```
+
+Then continue with [First run](#first-run).
+A source build installs Seiren FX with the scripts under [Install the Seiren FX driver](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
 
 ### Run the tests / dev build
 
@@ -337,225 +367,11 @@ swift run seiren-probe mix 5 --app com.spotify.client   # run the Stream Mixer, 
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
 ```
 
-## How it works
-
-The app opens the Seiren as a **full-duplex Core Audio device** and installs
-**one `AudioDeviceIOProc`**. On every audio cycle that callback copies the mic
-input (channel 0) into every headphone output channel, scaled by your level
-(`0…1`). That's the whole monitoring path — input to output, in-process, on
-the real-time audio thread.
-
-- **Auto start/stop.** The engine listens on `kAudioHardwarePropertyDevices`. When
-  a Seiren appears it starts the IOProc; when it disappears it tears down cleanly
-  (`AudioDeviceStop` + `AudioDeviceDestroyIOProcID`). Your "monitoring on" intent
-  survives unplugging.
-- **Real-time-safe callback.** The IOProc does no allocation, no locks, no Obj-C,
-  no Swift-runtime calls — it just reads samples and writes samples. The level is
-  a single atomically-readable value the UI can change live.
-- **Device match by name.** Any *physical* audio device whose name contains
-  `seiren` (case-insensitive) and has an input stream qualifies, so most Seiren
-  models work with no per-model code. A model with an output stream (headphone
-  jack) gets the monitor; an input-only model (V3 Mini) runs the same IOProc
-  into Seiren FX only - the engine notices the missing output at runtime, so
-  there is no model list to maintain. The app's own virtual devices (Seiren FX,
-  its private aggregate) are excluded even though their names match.
-  With no Seiren connected, the same route runs from another physical input
-  (the Input menu), into Seiren FX only.
-
-The core lives in **`SeirenKit`** (no AppKit, fully testable):
-
-```swift
-let engine = MonitorEngine(deviceNameMatch: "seiren")
-engine.enable()          // find the Seiren, start the IOProc
-engine.level = 0.8       // 0...1, applied live
-engine.disable()         // stop monitoring (intent persists across unplug)
-```
-
-> The reference IOProc is already in the repo — see `swMonProc` / `softwareMonitor()`
-> in [`Sources/seiren-probe/main.swift`](Sources/seiren-probe/main.swift), which
-> you can run today (`swift run seiren-probe monitor swmon 0.9`) to hear the exact
-> path the app uses.
-
-### The latency trade-off, honestly
-
-> **The monitor is *software*.** macOS blocks the route to the Seiren's
-> *hardware* sidetone (every hardware path is blocked or silent — see
-> [Why software monitoring?](#why-software-monitoring-the-hardware-sidetone-path-macos-blocks)),
-> so the app runs one full-duplex Core Audio loop that copies mic → headphone
-> in userspace. The EQ/denoise add nothing to this direct-monitor path (Studio
-> denoise applies only to the broadcast). It is not a sample-accurate DAW monitor.
-
-Monitoring delay ≈ one audio I/O buffer. At a typical 256-frame buffer / 48 kHz
-that's ~5 ms each way; you can lower it with
-`kAudioDevicePropertyBufferFrameSize` at the cost of CPU and stability. For
-*hearing your own voice* this is fine — it's well under the threshold where you'd
-notice an echo. It is **not** a zero-latency hardware path (which, again, macOS
-won't give us here), so it isn't the right tool for sample-accurate latency-free
-DAW monitoring.
-
-## Why software monitoring? (the hardware-sidetone path macOS blocks)
-
-On Windows, Synapse drives the Seiren's **hardware** sidetone directly, with zero
-added latency. The same hardware mix is not reachable from macOS userspace, and
-**every hardware path is blocked or silent.** Short version so you don't repeat
-the dead ends:
-
-- **It isn't HID.** Sidetone looks like a Razer vendor **HID** Feature
-  report (`0xFF53` / report `0x07`) at first, but mining Synapse's own logs and the
-  `RzNative_058e` DLL shows sidetone is a **USB-Audio-Class Feature-Unit
-  control** (volume + mute `SET_CUR`), not a HID frame. The `0xFF53` HID channel
-  is real, but it carries EQ/DSP — wrong transport for monitoring.
-- **Core Audio play-through is exposed but silent.** macOS surfaces the device's
-  UAC controls, including `kAudioDevicePropertyPlayThru` (Apple's term for
-  hardware input monitoring). Setting it returns success — but **no audio comes
-  through.** Apple's play-through plumbing simply isn't wired to this device's
-  hardware mix.
-- **Raw UAC `SET_CUR` is blocked.** Talking to the Feature Unit directly is
-  impossible from userspace: `AppleUSBAudio` takes an **exclusive** claim on the
-  audio interface, so you can't issue the control transfer yourself.
-
-So the only thing left that actually makes sound is to do the mix ourselves: read
-the mic, write the headphones, in one Core Audio loop.
-
-Full investigation and evidence: [`docs/HARDWARE_SIDETONE.md`](docs/HARDWARE_SIDETONE.md)
-(and the device/protocol notes in [`docs/PROTOCOL.md`](docs/PROTOCOL.md)).
-
-## Heads-up / caveats
-
-- **Software monitoring, small latency.** ≈ one audio buffer (a few ms). Great for
-  hearing yourself; not a zero-latency hardware monitor. See
-  [above](#the-latency-trade-off-honestly).
-- **Needs Microphone permission (TCC).** The app reads the mic to monitor, EQ,
-  denoise, and route your voice, so macOS prompts for **Microphone** access the
-  first time. Without it, nothing can start and the menu will say so.
-- **Creator features need Seiren FX.** The EQ and noise suppression reach your
-  monitor and other apps only through the bundled **Seiren FX** device — install it
-  once from **Voice ▸**. Plain headphone monitoring works without it.
-- **The Stream Mixer needs macOS 14.2+ and system-audio permission (TCC).**
-  It reads other apps' audio through Core Audio process taps; macOS asks the
-  first time the mixer runs.
-- **Lighting needs Input Monitoring (TCC).** The Chroma ring is driven over the
-  mic's HID channel, which macOS gates behind **Input Monitoring**. The app only
-  asks when you first use Lighting.
-- **Old builds (v1.0.0 and earlier) are unsigned.** Current releases are signed
-  and notarized; only the old builds need the one-time Gatekeeper bypass.
-- **Headphones go in the Seiren, not the Mac.** Monitoring routes mic →
-  *Seiren's* output. Plug your headphones into the mic.
-- **V3 Mini: no monitoring, no lighting.** It has no headphone jack and no
-  Chroma zone. It gets the EQ + noise suppression through Seiren FX, which is
-  the feature its owners ask for.
-
-## Is it safe?
-
-Releases from **v1.1.0** on are **signed with an Apple Developer ID and notarized
-by Apple**, so Gatekeeper opens them cleanly - no bypass, no warnings.
-If you'd rather not trust a prebuilt binary anyway, **build it from source**
-(Option C) - the whole app is this repo, no dependencies. Released zips ship with
-a **SHA-256 checksum** so you can verify the download.
-(The old **v1.0.0** build predates the Developer ID and is unsigned; its one-time
-**Open Anyway** instructions live in that release's notes, and the Homebrew cask
-clears its quarantine flag automatically.)
-
-## Architecture
-
-```
-Sources/
-  SeirenKit/         model-independent core (no AppKit, fully testable)
-    MonitorEngine.swift   IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
-    AudioDevices.swift    Core Audio device + recording-process queries
-    MixerEngine.swift     Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
-    EQEngine.swift        RBJ-cookbook coefficient math + voice presets
-    Settings.swift        versioned UserDefaults preferences + schema migrations
-    ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
-  SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler,
-                     stream mix bus (gain ramps + limiter)
-  RNNoise/           vendored xiph/rnnoise (BSD-3) — the "Studio" denoiser
-  seiren-mac/        the menu-bar agent (main.swift + AppDelegate): 🎙 menu —
-                     modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
-                     Stream Mixer ▸, Seiren FX install
-  seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
-Driver/SeirenFX/     the loopback virtual audio devices, Seiren FX and Seiren
-                     Stream Mix (AudioServerPlugIn)
-docs/
-  HARDWARE_SIDETONE.md  why hardware sidetone isn't reachable on macOS
-  PROTOCOL.md           device topology + the (EQ/DSP) HID protocol notes
-devices/             example/contributed device metadata (data, not code)
-```
-
-Supporting another Seiren is **usually zero code** — the name match catches it.
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-### Troubleshooting
-
-**`Invalid manifest … Undefined symbols … PackageDescription.Package.__allocating_init`**
-
-`Package.swift` can't link against your toolchain's `PackageDescription`. This
-almost always means **only the Command Line Tools are installed (no full Xcode)**,
-or `xcode-select` points at a stale/partial CLT. Fix it:
-
-```sh
-xcode-select -p          # if this prints /Library/Developer/CommandLineTools, that's the problem
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-swift --version          # should report Swift 6.x
-swift build
-```
-
-**Monitoring won't turn on / I hear nothing.**
-
-- Confirm **Microphone** permission is granted (System Settings → Privacy &
-  Security → Microphone).
-- Confirm the Seiren is selected as a usable device — `swift run seiren-probe`
-  should list a device whose name contains "Seiren".
-- Confirm your headphones are in the **Seiren's** jack, not the Mac's.
-
-**Apps on Seiren FX hear my Mac's mic instead of the Seiren.**
-
-- The app didn't find the Seiren, so Automatic fell back to another mic (the
-  menu's first line names it).
-  `swift run seiren-probe inputs` lists every input and which one Automatic
-  picks; the Seiren must appear there as eligible.
-- Check that **Input ▸** is set to **Automatic** or to the Seiren.
-
-**V3 Mini: the menu says “needs Seiren FX” / apps record a flat mic.**
-
-- The Mini has no jack, so everything runs through Seiren FX: install it from
-  **Voice ▸ Install Seiren FX…**, set the mode to **On — always**, then pick
-  **Seiren FX** as the microphone in the app you record with.
-- `swift run seiren-probe route` runs the real engine for 5 s and prints whether
-  the route is live, the buffer layout, and the mic's peak level. A peak of
-  “silence” with the route live usually means the mic is muted (the tap-to-mute
-  LED is red).
+How the app is put together is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Shipped:**
-
-- [x] Software headphone monitoring — menu-bar modes + Level slider, launch-at-login
-- [x] Parametric **voice EQ** — Podcast / Studio / Broadcast presets
-- [x] **Noise suppression** — a zero-latency C gate, plus opt-in RNNoise **"Studio"** neural denoise
-- [x] **Seiren FX** virtual device — other apps record the *processed* voice (OBS / Zoom / Discord)
-- [x] **Homebrew** distribution — `brew install --cask razer-seiren`
-- [x] **Lighting** - the V3 Pro's 12-LED Chroma ring, driven natively over the
-      vendor HID channel (protocol recovered from Synapse 4's own lighting
-      engine - `docs/PROTOCOL.md` §5 - and verified on hardware). **🎙 →
-      Lighting ▸**: Spectrum / Breathing / Wave / Static colors / Off +
-      brightness; `swift run seiren-probe lighting` from the CLI.
-- [x] **Notarization** - releases from v1.1.0 are Developer-ID-signed,
-      notarized, and stapled by the release pipeline; Gatekeeper opens them
-      with no bypass (`spctl` verified: "Notarized Developer ID").
-- [x] **Seiren V3 Mini** - input-only mics (no headphone jack) are now
-      supported: EQ + noise suppression through Seiren FX, with the monitor
-      controls and Lighting menu out of the way. `swift run seiren-probe route`
-      is the one-command check.
-- [x] **Input fallback** - with the Seiren unplugged, Seiren FX keeps carrying
-      your voice from your Mac's default mic, so apps set to Seiren FX don't go
-      silent; **🎙 → Input ▸** picks any mic explicitly.
-
-- [x] **Stream Mixer** - your voice plus app audio, each with its own level
-      and mute, in a second virtual device (**Seiren Stream Mix**) for OBS.
-      Core Audio process taps (macOS 14.2+), mixed in the app; **🎙 → Stream
-      Mixer ▸**; `swift run seiren-probe mix` from the CLI.
-
+Planned work is tracked in the [issue tracker](https://github.com/yterry/razer-seiren-macos/issues), and shipped versions are on the [releases page](https://github.com/yterry/razer-seiren-macos/releases).
 See [`docs/CREATOR_DESIGN.md`](docs/CREATOR_DESIGN.md) for the full design.
 
 ## Credits & prior art
