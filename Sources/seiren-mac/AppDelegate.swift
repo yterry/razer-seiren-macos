@@ -197,12 +197,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func configureStatusButtonImage() {
         guard let button = statusItem.button else { return }
         let status = statusLine()
-        let image = NSImage(systemSymbolName: Self.statusSymbolName(for: engine.state),
-                            accessibilityDescription: status)
-        image?.isTemplate = true
-        button.image = image
+        button.image = Self.statusButtonImage(for: engine.state, status: status)
         button.appearsDisabled = (engine.mode == .off)
         button.toolTip = status
+    }
+
+    /// The status item's glyph for `state`, described by the status line so
+    /// VoiceOver speaks the same text the menu and tooltip show.
+    static func statusButtonImage(for state: MonitorEngine.State, status: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: statusSymbolName(for: state), accessibilityDescription: status)
+        image?.isTemplate = true
+        return image
     }
 
     static func statusSymbolName(for state: MonitorEngine.State) -> String {
@@ -688,29 +693,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     private func lightingBrightnessItem() -> NSMenuItem {
-        let item = NSMenuItem()
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
-        container.autoresizingMask = [.width]   // the menu sizes it to its own width
+        Self.lightingBrightnessItem(percent: settings.lightingState?.brightnessPercent ?? 100, target: self)
+    }
 
-        let label = NSTextField(labelWithString: "Brightness")
-        label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
-        label.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .secondaryLabelColor
-        container.addSubview(label)
-
-        let slider = NSSlider(value: Double(settings.lightingState?.brightnessPercent ?? 100),
-                              minValue: 0, maxValue: 100,
-                              target: self, action: #selector(lightingBrightnessChanged(_:)))
-        slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
-        slider.autoresizingMask = [.width]
+    static func lightingBrightnessItem(percent: Int, target: AnyObject?) -> NSMenuItem {
+        let slider = PercentSlider(value: Double(percent),
+                                   minValue: 0, maxValue: 100,
+                                   target: target, action: #selector(lightingBrightnessChanged(_:)))
         // Not continuous: each change talks to the device, so send on release.
         slider.isContinuous = false
         slider.isEnabled = true
-        slider.toolTip = "Lighting brightness"
-        container.addSubview(slider)
-
-        item.view = container
-        return item
+        return sliderItem(caption: "Brightness", label: "Lighting brightness", slider: slider)
     }
 
     private func nsItem(_ title: String, _ ns: MonitorEngine.NoiseSuppression) -> NSMenuItem {
@@ -772,29 +765,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
     }
 
-    /// A menu item hosting an NSSlider with a small label.
     private func volumeItem(enabled: Bool) -> NSMenuItem {
+        let (item, slider) = Self.volumeItem(level: engine.level, enabled: enabled, target: self)
+        self.levelSlider = slider
+        return item
+    }
+
+    static func volumeItem(level: Float, enabled: Bool, target: AnyObject?) -> (item: NSMenuItem, slider: PercentSlider) {
+        let slider = PercentSlider(value: Double(level),
+                                   minValue: 0, maxValue: 1,
+                                   target: target, action: #selector(levelChanged(_:)))
+        slider.isContinuous = true
+        slider.isEnabled = enabled
+        return (sliderItem(caption: "Volume", label: "Headphone monitor volume", slider: slider), slider)
+    }
+
+    /// A menu item hosting a slider under a small visible caption. The slider
+    /// carries the full name as its accessibility label and tooltip, so the
+    /// caption is hidden from accessibility to keep VoiceOver from reading it twice.
+    /// Both are set on the cells: accessibility ignores a single-cell control and
+    /// exposes its cell, and a setting made on the control never reaches the cell.
+    static func sliderItem(caption: String, label: String, slider: PercentSlider) -> NSMenuItem {
         let item = NSMenuItem()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 40))
         container.autoresizingMask = [.width]   // the menu sizes it to its own width
 
-        let label = NSTextField(labelWithString: "Volume")
-        label.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
-        label.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .secondaryLabelColor
-        container.addSubview(label)
+        let captionField = NSTextField(labelWithString: caption)
+        captionField.frame = NSRect(x: 14, y: 22, width: 100, height: 14)
+        captionField.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
+        captionField.textColor = .secondaryLabelColor
+        captionField.cell?.setAccessibilityElement(false)
+        container.addSubview(captionField)
 
-        let slider = NSSlider(value: Double(engine.level),
-                              minValue: 0, maxValue: 1,
-                              target: self, action: #selector(levelChanged(_:)))
         slider.frame = NSRect(x: 14, y: 4, width: 212, height: 19)
         slider.autoresizingMask = [.width]
-        slider.isContinuous = true
-        slider.isEnabled = enabled
-        slider.toolTip = "Headphone monitor volume"
+        slider.toolTip = label
+        slider.cell?.setAccessibilityLabel(label)
         container.addSubview(slider)
 
-        self.levelSlider = slider
         item.view = container
         return item
     }
@@ -1032,21 +1040,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 }
 
+/// A slider that accessibility reads as a percentage of its range instead of the
+/// raw value, so 0...1 and 0...100 sliders sound alike. Accessibility ignores an
+/// NSSlider and exposes its cell, so the value description lives on the cell.
+final class PercentSlider: NSSlider {
+    override class var cellClass: AnyClass? {
+        get { PercentSliderCell.self }
+        set {}
+    }
+}
+
+final class PercentSliderCell: NSSliderCell {
+    override func accessibilityValueDescription() -> String? {
+        let fraction = (doubleValue - minValue) / (maxValue - minValue)
+        return "\(Int((fraction * 100).rounded()))%"
+    }
+}
+
 /// Menu-hosted controls keep tracking without dismissing the menu. Slider and
 /// mute actions update this row immediately; delegate updates reuse the view.
 @MainActor
-private final class MixerChannelView: NSView {
+final class MixerChannelView: NSView {
     private(set) var channel: MixerEngine.Channel
     private let nameLabel = NSTextField(labelWithString: "")
     private let valueLabel = NSTextField(labelWithString: "")
-    private let slider: NSSlider
+    private let slider: PercentSlider
     private let mute = NSButton()
     private let changed: (MixerEngine.Channel) -> Void
 
     init(channel: MixerEngine.Channel, icon: NSImage?, changed: @escaping (MixerEngine.Channel) -> Void) {
         self.channel = channel
         self.changed = changed
-        slider = NSSlider(value: Double(channel.level), minValue: 0, maxValue: 1, target: nil, action: nil)
+        slider = PercentSlider(value: Double(channel.level), minValue: 0, maxValue: 1, target: nil, action: nil)
         super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 44))
         autoresizingMask = [.width]   // the menu sizes the row to its own width
         let image = NSImageView(frame: NSRect(x: 14, y: 24, width: 16, height: 16))
@@ -1090,7 +1115,7 @@ private final class MixerChannelView: NSView {
         // A muted channel keeps its level for when it comes back; dimming the
         // slider shows that it isn't reaching the stream right now.
         slider.alphaValue = channel.muted ? 0.4 : 1
-        slider.setAccessibilityLabel("\(channel.name) level on stream")
+        slider.cell?.setAccessibilityLabel("\(channel.name) level on stream")
         mute.image = NSImage(systemSymbolName: channel.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                              accessibilityDescription: nil)
         mute.toolTip = channel.muted ? "Unmute on stream" : "Mute on stream"
