@@ -1,0 +1,50 @@
+name: Device report
+description: Report that a Seiren or Razer mic works with Seiren for macOS (or doesn't)
+title: "[device] "
+labels: ["device"]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Model name
+      placeholder: Seiren V3 Pro, Seiren V3 Mini, ...
+    validations:
+      required: true
+  - type: dropdown
+    id: headphone-jack
+    attributes:
+      label: Does the mic have a headphone jack?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Which features work?
+      description: Tick each one you checked and found working.
+      options:
+        - label: Monitoring (hearing yourself in the mic's headphone jack)
+        - label: EQ and noise suppression through Seiren FX (other apps hear the processed voice)
+        - label: Lighting
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Click the Seiren icon in the menu bar, choose **Copy Diagnostics** (near the bottom of the menu, just above **Quit Seiren**), and paste the result here.
+        Review the text before posting; it lists your audio devices and recent app events.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: seiren-probe
+    attributes:
+      label: seiren-probe output (optional, only if you build from source)
+      description: |
+        The output of `swift run seiren-probe`, plus `swift run seiren-probe monitor swmon 0.9` for a mic with a headphone jack or `swift run seiren-probe route` for one without.
+      render: text
+    validations:
+      required: false

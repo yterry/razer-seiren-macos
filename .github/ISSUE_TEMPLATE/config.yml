@@ -1,0 +1,4 @@
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/yterry/razer-seiren-macos#troubleshooting
+    about: Fixes for common problems, such as monitoring that won't turn on or apps that hear the wrong mic.
