@@ -12,6 +12,27 @@ userspace is to do the mix ourselves — read the mic, write the headphones, in 
 Core Audio `AudioDeviceIOProc`. That is `seiren-mac`. Confirmed audible on a Razer
 Seiren V3 Pro (VID `0x1532` / PID `0x058E`).
 
+## Why software monitoring? (the hardware-sidetone path macOS blocks)
+
+On Windows, Synapse drives the Seiren's **hardware** sidetone directly, with zero added latency.
+The same hardware mix is not reachable from macOS userspace, and **every hardware path is blocked or silent.**
+Short version so you don't repeat the dead ends:
+
+- **It isn't HID.**
+  Sidetone looks like a Razer vendor **HID** Feature report (`0xFF53` / report `0x07`) at first, but mining Synapse's own logs and the `RzNative_058e` DLL shows sidetone is a **USB-Audio-Class Feature-Unit control** (volume + mute `SET_CUR`), not a HID frame.
+  The `0xFF53` HID channel is real, but it carries EQ/DSP - wrong transport for monitoring.
+- **Core Audio play-through is exposed but silent.**
+  macOS surfaces the device's UAC controls, including `kAudioDevicePropertyPlayThru` (Apple's term for hardware input monitoring).
+  Setting it returns success - but **no audio comes through.**
+  Apple's play-through plumbing simply isn't wired to this device's hardware mix.
+- **Raw UAC `SET_CUR` is blocked.**
+  Talking to the Feature Unit directly is impossible from userspace: `AppleUSBAudio` takes an **exclusive** claim on the audio interface, so you can't issue the control transfer yourself.
+
+So the only thing left that actually makes sound is to do the mix ourselves: read the mic, write the headphones, in one Core Audio loop.
+
+The full investigation and evidence follow below; the device and protocol notes are in [`PROTOCOL.md`](PROTOCOL.md).
+How the app's monitor loop works and what latency it adds are in [`CONTRIBUTING.md`](../CONTRIBUTING.md#how-it-works).
+
 ## What sidetone actually is on this device
 
 Early on we assumed monitoring was a Razer **vendor HID** Feature report (the
