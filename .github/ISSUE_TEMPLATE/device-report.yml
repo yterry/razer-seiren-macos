@@ -10,6 +10,20 @@ body:
       placeholder: Seiren V3 Pro, Seiren V3 Mini, ...
     validations:
       required: true
+  - type: input
+    id: device-name
+    attributes:
+      label: Device name as shown in Audio MIDI Setup (optional)
+      description: Open Audio MIDI Setup (in /Applications/Utilities) and copy the mic's name exactly as listed.
+    validations:
+      required: false
+  - type: input
+    id: vid-pid
+    attributes:
+      label: USB vendor and product ID (VID/PID), if you know them (optional)
+      description: "Find them in System Information > USB, or run `ioreg -p IOUSB -l | grep -iE 'idVendor|idProduct'`."
+    validations:
+      required: false
   - type: dropdown
     id: headphone-jack
     attributes:
@@ -36,9 +50,25 @@ body:
       description: |
         Click the Seiren icon in the menu bar, choose **Copy Diagnostics** (near the bottom of the menu, just above **Quit Seiren**), and paste the result here.
         Review the text before posting; it lists your audio devices and recent app events.
+        If your version of Seiren has no **Copy Diagnostics** item, enter "not available in my version" and fill in the versions below.
       render: text
     validations:
       required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version (optional)
+      description: Apple menu > About This Mac.
+      placeholder: macOS 15.1
+    validations:
+      required: false
+  - type: input
+    id: app-version
+    attributes:
+      label: Seiren app version (optional)
+      description: In Finder, select Seiren in Applications and choose File > Get Info.
+    validations:
+      required: false
   - type: textarea
     id: seiren-probe
     attributes:
