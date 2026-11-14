@@ -197,3 +197,120 @@ Then:
    stay **green**. If it's red, it's not ready.
 
 Small, well-scoped PRs review fastest. Thank you.
+
+## Releasing
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`.
+It runs `make test`, builds the universal app with `scripts/package.sh`, signs and notarizes it with `scripts/notarize.sh`, checks the zip with `scripts/verify-release.sh`, publishes the GitHub release, and opens and merges a pull request in `yterry/homebrew-tap` that bumps the cask.
+The steps below are the ones a person does around that workflow.
+In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
+
+### Before tagging
+
+1. Run `make test` on the commit you will tag.
+2. Check whether the driver changed since the last release with `git diff --stat vP.Q.R -- Driver/SeirenFX`.
+   If it did, bump both `CFBundleShortVersionString` and `CFBundleVersion` in `Driver/SeirenFX/Info.plist` to the same new version.
+   The app offers to update Seiren FX only when the bundled `CFBundleShortVersionString` is higher than the installed one, so a driver change without a bump never reaches users who already have Seiren FX.
+3. If the driver changed, run the on-Mac driver checklist below and record the result of each check in the pull request that bumps the driver version.
+
+The app's own version comes from the tag: `scripts/package.sh` writes it into `Seiren.app`, so there is no app version to bump by hand.
+
+### On-Mac driver checklist
+
+`make test` runs the driver's logic in `Driver/SeirenFX/Tests.c`, but only a real Mac loads the plug-in into `coreaudiod`.
+These checks need admin rights, a mic, and a calling app such as Teams, Zoom or Google Meet.
+Before you start, quit any installed `Seiren.app` and note the default input and output in System Settings ▸ Sound, then set them back when you are done.
+
+1. **Reinstall prompt.**
+   With the previous release's Seiren FX still installed, package the release commit with `VERSION=X.Y.Z scripts/package.sh` and open `dist/Seiren.app`.
+   The 🎙 ▸ Voice menu shows **Update Seiren FX…** with "A newer Seiren FX comes with this app".
+   If the installed driver is older than 3.0.0 (it has no hidden feeders), it shows "Seiren FX needs a one-time reinstall" and **Reinstall Seiren FX…** instead.
+   Choose the item and enter your password.
+   Afterwards the update item is gone from the Voice menu.
+   If you cannot use the packaged app, install the new driver with `scripts/build-driver.sh` and then `sudo scripts/install-driver.sh`, and record this check as not run.
+2. **Device topology.**
+   `swift run seiren-probe inputs` lists `Seiren FX` and `Seiren Stream Mix` with `streams: 1 in / 0 out`, and prints `Seiren FX installed: yes`.
+   Neither `Seiren FX Feeder` nor `Seiren Stream Mix Feeder` appears in `system_profiler SPAudioDataType`.
+   The feeders are hidden output devices that the app writes into.
+3. **Speaker lists.**
+   Seiren FX and Seiren Stream Mix are missing from the output list in System Settings ▸ Sound and from the speaker list of the calling app.
+   They still appear in both places as microphones.
+4. **Recording across two calls, Seiren FX.**
+   Run `dist/Seiren.app` in Auto mode.
+   Join a call with Seiren FX as the microphone, check that the other side (or the app's mic test) hears your processed voice and that your speakers play the call, then leave.
+   Join a second call and check both again.
+   Then run `swift run seiren-probe listen "Seiren FX" 10` twice in a row while speaking; both runs print peaks well above silence.
+5. **Recording across two calls, Seiren Stream Mix.**
+   Turn on 🎙 ▸ Stream Mixer ▸ **Mix into Seiren Stream Mix**.
+   Repeat the two calls from step 4 with Seiren Stream Mix as the microphone, then run `swift run seiren-probe listen "Seiren Stream Mix" 10` twice in a row while speaking; both runs print peaks well above silence.
+6. **Sample-rate changes.**
+   While the app sends your voice into Seiren FX, start `swift run seiren-probe listen "Seiren FX" 60` and keep speaking.
+   During the run, open Audio MIDI Setup and set Seiren FX to 44.1 kHz, then 96 kHz, then back to 48 kHz.
+   After each change the per-second peaks keep tracking your voice, with no long run of silence.
+   Repeat with Seiren Stream Mix and `swift run seiren-probe listen "Seiren Stream Mix" 60`.
+
+### Tagging
+
+```sh
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+gh run list --workflow release.yml --limit 1
+gh run watch <run-id>
+```
+
+Notarization can take hours.
+`scripts/notarize.sh` polls Apple for up to 3 hours by default (`NOTARY_TIMEOUT_MINUTES`), and a new Developer ID account's first submissions have sat "In Progress" for over 40 minutes.
+If notarization fails or times out, no GitHub release is created, and the signed build stays on the run as the `signed-prenotarization` artifact for 7 days.
+Once the cause is fixed, rerun the workflow with `gh run rerun <run-id>`.
+
+### After the workflow
+
+1. **Add "What's new" to the release notes.**
+   The workflow publishes only the generated install text.
+   Put a `## What's new in vX.Y.Z` section and a `---` line above it:
+
+   ```sh
+   gh release view vX.Y.Z --json body -q .body > notes.md
+   # edit notes.md: add "## What's new in vX.Y.Z", the changes, and "---" above the generated text
+   gh release edit vX.Y.Z --notes-file notes.md
+   ```
+
+2. **Confirm the tap pull request merged.**
+   `gh pr list --repo yterry/homebrew-tap --state all --search "razer-seiren X.Y.Z"` shows it as merged.
+   The "Update Homebrew tap" step never fails the run, so read its log for a skip or a warning.
+   If the pull request is still open, merge it.
+   If there is none, bump the cask by hand in a clone of `yterry/homebrew-tap`: run `scripts/bump-cask.sh X.Y.Z` on a new branch, commit `Casks/razer-seiren.rb`, and merge it through a pull request, because the tap's main branch accepts changes only through pull requests.
+3. **Upgrade on a Mac.**
+   Run `brew update && brew upgrade --cask razer-seiren`, then check that `brew list --cask --versions razer-seiren` prints `X.Y.Z`.
+
+### Rolling back a release
+
+1. **Point Homebrew at the previous version.**
+   In a clone of `yterry/homebrew-tap`, find the bump commit with `git log --oneline -- Casks/razer-seiren.rb`; its title is `razer-seiren X.Y.Z`.
+   Run `git revert <commit>` on a new branch and merge it through a pull request.
+   `Casks/razer-seiren.rb` then names version `P.Q.R` and its `sha256` again.
+   Users who already upgraded get the previous version with `brew update && brew reinstall --cask razer-seiren`.
+2. **Move "latest" back to the previous release.**
+   Run `gh release edit vX.Y.Z --prerelease`, so GitHub's latest release is `vP.Q.R` again.
+
+### Rolling back the driver
+
+A driver rollback through the app is not possible today.
+The app offers to install its bundled Seiren FX only when the bundled version is higher than the installed one (`DriverInstaller.updateAvailable` in `Sources/seiren-mac/DriverInstaller.swift`).
+Going back to an older `Seiren.app` therefore leaves a newer, bad driver in place.
+Users who installed a bad driver get the older one back only from a source checkout:
+
+```sh
+git checkout vP.Q.R
+scripts/build-driver.sh
+sudo scripts/install-driver.sh
+```
+
+### Secrets
+
+The release workflow reads these repository secrets.
+The comment block at the top of `.github/workflows/release.yml` describes the signing ones, and the comment above its "Update Homebrew tap" step describes the tap token.
+
+- `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID` and `NOTARY_PASSWORD` sign and notarize the app.
+  Without `MACOS_CERT_P12` the workflow publishes an ad-hoc signed build; with it but any of the others missing, the run fails before packaging.
+- `HOMEBREW_TAP_TOKEN` lets the workflow bump the tap; without it that step is skipped.
