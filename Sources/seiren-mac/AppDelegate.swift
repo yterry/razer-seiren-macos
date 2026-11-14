@@ -197,12 +197,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func configureStatusButtonImage() {
         guard let button = statusItem.button else { return }
         let status = statusLine()
-        let image = NSImage(systemSymbolName: Self.statusSymbolName(for: engine.state),
-                            accessibilityDescription: status)
-        image?.isTemplate = true
-        button.image = image
+        button.image = Self.statusButtonImage(for: engine.state, status: status)
         button.appearsDisabled = (engine.mode == .off)
         button.toolTip = status
+    }
+
+    /// The status item's glyph for `state`, described by the status line so
+    /// VoiceOver speaks the same text the menu and tooltip show.
+    static func statusButtonImage(for state: MonitorEngine.State, status: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: statusSymbolName(for: state), accessibilityDescription: status)
+        image?.isTemplate = true
+        return image
     }
 
     static func statusSymbolName(for state: MonitorEngine.State) -> String {
@@ -688,13 +693,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     private func lightingBrightnessItem() -> NSMenuItem {
-        let slider = PercentSlider(value: Double(settings.lightingState?.brightnessPercent ?? 100),
+        Self.lightingBrightnessItem(percent: settings.lightingState?.brightnessPercent ?? 100, target: self)
+    }
+
+    static func lightingBrightnessItem(percent: Int, target: AnyObject?) -> NSMenuItem {
+        let slider = PercentSlider(value: Double(percent),
                                    minValue: 0, maxValue: 100,
-                                   target: self, action: #selector(lightingBrightnessChanged(_:)))
+                                   target: target, action: #selector(lightingBrightnessChanged(_:)))
         // Not continuous: each change talks to the device, so send on release.
         slider.isContinuous = false
         slider.isEnabled = true
-        return Self.sliderItem(caption: "Brightness", label: "Lighting brightness", slider: slider)
+        return sliderItem(caption: "Brightness", label: "Lighting brightness", slider: slider)
     }
 
     private func nsItem(_ title: String, _ ns: MonitorEngine.NoiseSuppression) -> NSMenuItem {
@@ -757,13 +766,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     private func volumeItem(enabled: Bool) -> NSMenuItem {
-        let slider = PercentSlider(value: Double(engine.level),
+        let (item, slider) = Self.volumeItem(level: engine.level, enabled: enabled, target: self)
+        self.levelSlider = slider
+        return item
+    }
+
+    static func volumeItem(level: Float, enabled: Bool, target: AnyObject?) -> (item: NSMenuItem, slider: PercentSlider) {
+        let slider = PercentSlider(value: Double(level),
                                    minValue: 0, maxValue: 1,
-                                   target: self, action: #selector(levelChanged(_:)))
+                                   target: target, action: #selector(levelChanged(_:)))
         slider.isContinuous = true
         slider.isEnabled = enabled
-        self.levelSlider = slider
-        return Self.sliderItem(caption: "Volume", label: "Headphone monitor volume", slider: slider)
+        return (sliderItem(caption: "Volume", label: "Headphone monitor volume", slider: slider), slider)
     }
 
     /// A menu item hosting a slider under a small visible caption. The slider
@@ -1046,7 +1060,7 @@ final class PercentSliderCell: NSSliderCell {
 /// Menu-hosted controls keep tracking without dismissing the menu. Slider and
 /// mute actions update this row immediately; delegate updates reuse the view.
 @MainActor
-private final class MixerChannelView: NSView {
+final class MixerChannelView: NSView {
     private(set) var channel: MixerEngine.Channel
     private let nameLabel = NSTextField(labelWithString: "")
     private let valueLabel = NSTextField(labelWithString: "")
