@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var statusItem: NSStatusItem!
     private let statusMenu = NSMenu()
     private var statusMenuIsOpen = false
+    private var driverChangeInProgress = false
     /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
     /// to exercise the menu without the hardware. Not a user setting.
@@ -247,8 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             open.target = self
             menu.addItem(open)
         }
-        if engine.state == .needsFX { addNeedsFXItems(to: menu) }
-        addDriverUpdateItems(to: menu)
+        if engine.state == .needsFX { addNeedsFXItems(to: menu) } else { addDriverUpdateItems(to: menu) }
         if case .failed(let code) = engine.state {
             menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
             let retry = NSMenuItem(title: "Try Again", action: #selector(retryAudio), keyEquivalent: "")
@@ -328,10 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func addNeedsFXItems(to menu: NSMenu) {
         menu.addItem(disabledItem("This mic has no headphone jack - it works through Seiren FX"))
         if DriverInstaller.isBundled {
-            let install = NSMenuItem(title: "Install Seiren FX…",
-                                     action: #selector(installDriver), keyEquivalent: "")
-            install.target = self
-            menu.addItem(install)
+            menu.addItem(driverMenuItem(offeredDriverAction ?? .install))
         } else {
             menu.addItem(disabledItem("Install Seiren FX first (scripts/install-driver.sh)"))
         }
@@ -340,14 +337,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     /// Top-level notice when the bundled Seiren FX should replace the installed
     /// one, so a user who never opens Voice still learns about it.
     private func addDriverUpdateItems(to menu: NSMenu) {
-        let needsReinstall = engine.fxNeedsReinstall
-        guard DriverInstaller.isBundled, DriverInstaller.updateAvailable || needsReinstall else { return }
-        menu.addItem(disabledItem(needsReinstall
+        guard DriverInstaller.isBundled, let action = offeredDriverAction, action != .install else { return }
+        menu.addItem(disabledItem(action == .reinstall
             ? "Seiren FX needs a one-time reinstall" : "A newer Seiren FX comes with this app"))
-        let update = NSMenuItem(title: needsReinstall ? "Reinstall Seiren FX…" : "Update Seiren FX…",
-                                action: #selector(installDriver), keyEquivalent: "")
-        update.target = self
-        menu.addItem(update)
+        menu.addItem(driverMenuItem(action))
+    }
+
+    /// The driver change the menu offers for the current state, if any.
+    private var offeredDriverAction: DriverAction? {
+        Self.offeredDriverAction(fxLoaded: engine.fxAvailable, needsReinstall: engine.fxNeedsReinstall,
+                                 updateAvailable: DriverInstaller.updateAvailable)
+    }
+
+    /// A Seiren FX that macOS has not loaded is offered as a first install,
+    /// whatever is on disk: the user has never had it working.
+    static func offeredDriverAction(fxLoaded: Bool, needsReinstall: Bool, updateAvailable: Bool) -> DriverAction? {
+        if needsReinstall { return .reinstall }
+        if !fxLoaded { return .install }
+        return updateAvailable ? .update : nil
+    }
+
+    /// A menu item that runs `action`; the confirmation and result dialogs use
+    /// the same verb as the item's title.
+    static func driverMenuItem(_ action: DriverAction) -> NSMenuItem {
+        let item = NSMenuItem(title: "\(action.verb) Seiren FX…",
+                              action: #selector(AppDelegate.changeDriver(_:)), keyEquivalent: "")
+        item.representedObject = action
+        return item
+    }
+
+    private func driverMenuItem(_ action: DriverAction) -> NSMenuItem {
+        let item = Self.driverMenuItem(action)
+        item.target = self
+        return item
     }
 
     private func modeItem(_ title: String, _ mode: MonitorEngine.Mode) -> NSMenuItem {
@@ -405,7 +427,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         submenu.autoenablesItems = false
 
         let fxAvailable = engine.fxAvailable
-        let updateAvailable = DriverInstaller.updateAvailable
         // A bundled update or reinstall is offered at the top level of the menu.
         if engine.fxNeedsReinstall && !DriverInstaller.isBundled {
             submenu.addItem(disabledItem("Seiren FX needs a one-time reinstall"))
@@ -414,14 +435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
 
         if !fxAvailable {
-            if DriverInstaller.isBundled && !updateAvailable {
-                let install = NSMenuItem(title: "Install Seiren FX…",
-                                         action: #selector(installDriver), keyEquivalent: "")
-                install.target = self
-                install.isEnabled = true
-                submenu.addItem(install)
+            if DriverInstaller.isBundled {
+                submenu.addItem(driverMenuItem(offeredDriverAction ?? .install))
                 submenu.addItem(disabledItem("Enables EQ in OBS / Zoom / Discord"))
-            } else if !DriverInstaller.isBundled {
+            } else {
                 submenu.addItem(disabledItem("Build the Seiren FX driver to use EQ"))
                 submenu.addItem(disabledItem("(see the README — scripts/build-driver.sh)"))
             }
@@ -468,10 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         if DriverInstaller.isInstalled {
             submenu.addItem(.separator())
-            let uninstall = NSMenuItem(title: "Uninstall Seiren FX…",
-                                       action: #selector(uninstallDriver), keyEquivalent: "")
-            uninstall.target = self
-            submenu.addItem(uninstall)
+            submenu.addItem(driverMenuItem(.uninstall))
         }
 
         item.submenu = submenu
@@ -497,10 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case .needsFX, .needsDriverUpdate:
             let updating = mixer.availability == .needsDriverUpdate
             if DriverInstaller.isBundled {
-                let install = NSMenuItem(title: updating ? "Update Seiren FX…" : "Install Seiren FX…",
-                                         action: #selector(installDriver), keyEquivalent: "")
-                install.target = self
-                menu.addItem(install)
+                menu.addItem(driverMenuItem(updating ? .update : .install))
                 menu.addItem(disabledItem(updating ? "Adds the Seiren Stream Mix device" : "Adds Seiren FX and Seiren Stream Mix"))
             } else {
                 menu.addItem(disabledItem("Rebuild the driver: scripts/build-driver.sh"))
@@ -1021,11 +1032,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         return alert
     }
 
-    @objc private func installDriver() {
-        let action: DriverAction = engine.fxNeedsReinstall ? .reinstall
-            : DriverInstaller.updateAvailable ? .update
-            : DriverInstaller.isInstalled ? .reinstall : .install
-        guard Self.driverConfirmationAlert(action).runModal() == .alertFirstButtonReturn else { return }
+    /// Runs the driver change named by the clicked item. Ignored while an
+    /// earlier change is still waiting for coreaudiod, so a second click can't
+    /// save the paused mode as the one to restore.
+    @objc private func changeDriver(_ sender: NSMenuItem) {
+        guard !driverChangeInProgress, let action = sender.representedObject as? DriverAction,
+              Self.driverConfirmationAlert(action).runModal() == .alertFirstButtonReturn else { return }
+        if action == .uninstall { uninstallDriver() } else { installDriver(action) }
+    }
+
+    private func installDriver(_ action: DriverAction) {
         switch DriverInstaller.install() {
         case .cancelled:
             return
@@ -1049,8 +1065,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
     }
 
-    @objc private func uninstallDriver() {
-        guard Self.driverConfirmationAlert(.uninstall).runModal() == .alertFirstButtonReturn else { return }
+    private func uninstallDriver() {
         switch DriverInstaller.uninstall() {
         case .cancelled:
             return
@@ -1058,9 +1073,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             presentError("Couldn't uninstall Seiren FX:\n\(why)")
         case .ok:
             // Nothing to wait for once the device is gone; give coreaudiod
-            // the same time to come back that installs used to.
+            // time to come back before re-acquiring.
             let resume = pauseAudioForRestart()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { resume() }
+            Task { @MainActor in
+                try? await Task.sleep(for: DriverInstaller.restartSettle)
+                resume()
+            }
         }
     }
 
@@ -1069,11 +1087,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func pauseAudioForRestart() -> @MainActor () -> Void {
         let mode = engine.mode
         let mixing = mixer.isEnabled
+        driverChangeInProgress = true
         engine.setMode(.off)
         mixer.setEnabled(false)
         rebuildMenu()
         return { [weak self] in
             guard let self else { return }
+            self.driverChangeInProgress = false
             self.engine.setMode(mode)
             self.mixer.setEnabled(mixing)
             self.engine.includeStreamMixInTriggers = self.mixer.isEnabled
@@ -1120,7 +1140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             installedFX: Self.installedFXVersion,
             bundledFX: DriverInstaller.bundledVersion,
             reinstallOffered: needsReinstall,
-            updateOffered: DriverInstaller.isBundled && DriverInstaller.updateAvailable && !needsReinstall)
+            updateOffered: DriverInstaller.isBundled && offeredDriverAction == .update)
         let engineState = DiagnosticsSnapshot.Engine(
             mode: engine.mode, state: engine.state, inputPreference: engine.inputPreference,
             activeSource: engine.activeSource, routesThroughFX: engine.isRoutingThroughFX,

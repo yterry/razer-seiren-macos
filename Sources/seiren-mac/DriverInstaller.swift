@@ -70,12 +70,18 @@ enum DriverInstaller {
         return runPrivileged(shell)
     }
 
-    /// After an install restarts coreaudiod, check `deviceLoaded` every
+    /// How long coreaudiod takes to exit and come back after `killall`. Until
+    /// then the HAL can still list the devices of the old process.
+    static let restartSettle: Duration = .seconds(2)
+
+    /// After an install restarts coreaudiod, wait `restartSettle` so the old
+    /// Seiren FX can't count as loaded, then check `deviceLoaded` every
     /// `interval` until it returns true (true) or `timeout` has passed (false).
     static func waitForDevice(timeout: Duration = .seconds(10), interval: Duration = .milliseconds(250),
                               deviceLoaded: () -> Bool,
                               sleep: (Duration) async -> Void = { try? await Task.sleep(for: $0) }) async -> Bool {
-        var waited = Duration.zero
+        await sleep(restartSettle)
+        var waited = restartSettle
         while true {
             if deviceLoaded() { return true }
             if waited >= timeout { return false }
