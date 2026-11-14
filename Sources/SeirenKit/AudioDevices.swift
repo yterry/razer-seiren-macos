@@ -57,6 +57,23 @@ package enum AudioDevices {
         readUInt32(dev, kAudioDevicePropertyDeviceIsAlive) == 1
     }
 
+    /// Every device for "Copy Diagnostics", plus the hidden feeders, which
+    /// `allDevices()` leaves out.
+    package static func diagnosticsDevices() -> [DiagnosticsSnapshot.Device] {
+        var ids = allDevices()
+        for uid in [MonitorEngine.fxFeederUID, MonitorEngine.streamMixFeederUID] {
+            if let feeder = device(forUID: uid), !ids.contains(feeder) { ids.append(feeder) }
+        }
+        return ids.compactMap { dev in
+            guard let uid = deviceUID(dev), let name = deviceName(dev) else { return nil }
+            return DiagnosticsSnapshot.Device(
+                uid: uid, name: name, transport: transportType(dev),
+                inputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeInput),
+                outputStreams: streamCount(dev, scope: kAudioObjectPropertyScopeOutput),
+                sampleRate: nominalRate(dev))
+        }
+    }
+
     package static func fxDevice() -> AudioObjectID? {
         let devices = allDevices()
         return devices.first { deviceUID($0) == MonitorEngine.fxDeviceUID }

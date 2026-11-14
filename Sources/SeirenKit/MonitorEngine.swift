@@ -404,6 +404,10 @@ public final class MonitorEngine {
         didSet { if isStandbyRunning != oldValue { notify() } }
     }
 
+    /// Bundle IDs of the apps the last check found recording from a trigger
+    /// device, which is what Auto decides on. For bug reports only.
+    public private(set) var recordingBundleIDs: [String] = []
+
     public func setEQEnabled(_ on: Bool) {
         guard on != eqEngine.isEnabled else { return }
         eqEngine.setEnabled(on)
@@ -682,6 +686,7 @@ public final class MonitorEngine {
         } else {
             recording = []
         }
+        recordingBundleIDs = recordingProcesses?.map { $0.bundleID ?? "(no bundle id)" } ?? []
         let decision = Self.runPolicy(mode: mode, source: source, fxInstalled: fxOutput != nil,
                                       recordingDevices: recording, fxDeviceID: fx,
                                       streamMixDeviceID: streamMix,
