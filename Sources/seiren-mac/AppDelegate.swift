@@ -192,17 +192,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - Status item icon
 
     /// A mic glyph: bright with a waveform while actively monitoring, plain mic
-    /// while armed/idle, dimmed when off. Template-rendered for light/dark bars.
+    /// while armed/idle, crossed out when the user has to act, dimmed when off.
+    /// Template-rendered for light/dark bars; the status line is spoken.
     private func configureStatusButtonImage() {
         guard let button = statusItem.button else { return }
-        let running = engine.state == .running
-        let symbol = running ? "waveform.and.mic" : "mic"
-        let image = NSImage(systemSymbolName: symbol,
-                            accessibilityDescription: "Seiren monitoring")
+        let status = statusLine()
+        let image = NSImage(systemSymbolName: Self.statusSymbolName(for: engine.state),
+                            accessibilityDescription: status)
         image?.isTemplate = true
         button.image = image
         button.appearsDisabled = (engine.mode == .off)
-        button.toolTip = statusLine()
+        button.toolTip = status
+    }
+
+    static func statusSymbolName(for state: MonitorEngine.State) -> String {
+        switch state {
+        case .permissionDenied, .needsFX, .failed: return "mic.badge.xmark"
+        case .running: return "waveform.and.mic"
+        case .stopped, .waiting, .noDevice: return "mic"
+        }
     }
 
     // MARK: - Menu construction
@@ -234,6 +242,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             menu.addItem(open)
         }
         if engine.state == .needsFX { addNeedsFXItems(to: menu) }
+        if case .failed(let code) = engine.state {
+            menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
+            let retry = NSMenuItem(title: "Try Again", action: #selector(retryAudio), keyEquivalent: "")
+            retry.target = self
+            menu.addItem(retry)
+        }
 
         menu.addItem(.separator())
 
@@ -535,7 +549,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         menu.addItem(.separator())
         switch mixer.state {
         case .running: menu.addItem(disabledItem("Live · mixing into Seiren Stream Mix"))
-        case .failed(let code): menu.addItem(disabledItem("Mixer error (\(code))"))
+        case .failed(let code):
+            menu.addItem(disabledItem("Couldn't start the Stream Mixer"))
+            menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
+            let retry = NSMenuItem(title: "Try Again", action: #selector(retryMixer), keyEquivalent: "")
+            retry.target = self
+            menu.addItem(retry)
         default: menu.addItem(disabledItem("Starts when an app records Seiren Stream Mix"))
         }
         if engine.mode == .off { menu.addItem(disabledItem("Voice is silent while monitoring is Off")) }
@@ -564,6 +583,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         mixer.setEnabled(!mixer.isEnabled)
         settings.mixerEnabled = mixer.isEnabled
         engine.includeStreamMixInTriggers = mixer.isEnabled
+    }
+
+    @objc private func retryMixer() {
+        mixer.retryNow()
     }
 
     @objc private func addMixerApp(_ sender: NSMenuItem) {
@@ -742,8 +765,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             return "\(device) needs Seiren FX"
         case .permissionDenied:
             return "Microphone access denied"
-        case .failed(let code):
-            return String(format: "Audio error (%d)", code)
+        case .failed:
+            return "Couldn't start audio"
         case .stopped:
             return engine.activeSource.map { "Ready: \($0.name)" } ?? "Monitoring off"
         }
@@ -774,6 +797,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         self.levelSlider = slider
         item.view = container
         return item
+    }
+
+    private static func coreAudioErrorLine(_ code: OSStatus) -> String {
+        "Core Audio error \(code)"
     }
 
     private func disabledItem(_ title: String) -> NSMenuItem {
@@ -960,6 +987,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func retryAudio() {
+        engine.retryNow()
     }
 
     @objc private func quit() {
