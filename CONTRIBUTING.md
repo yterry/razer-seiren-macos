@@ -224,10 +224,10 @@ Before you start, quit any installed `Seiren.app` and note the default input and
 
 1. **Reinstall prompt.**
    With the previous release's Seiren FX still installed, package the release commit with `VERSION=X.Y.Z scripts/package.sh` and open `dist/Seiren.app`.
-   The 🎙 ▸ Voice menu shows **Update Seiren FX…** with "A newer Seiren FX comes with this app".
+   The 🎙 menu shows "A newer Seiren FX comes with this app" and **Update Seiren FX…**.
    If the installed driver is older than 3.0.0 (it has no hidden feeders), it shows "Seiren FX needs a one-time reinstall" and **Reinstall Seiren FX…** instead.
-   Choose the item and enter your password.
-   Afterwards the update item is gone from the Voice menu.
+   Choose the item, confirm the audio restart, and enter your password.
+   Afterwards the update item is gone from the 🎙 menu.
    If you cannot use the packaged app, install the new driver with `scripts/build-driver.sh` and then `sudo scripts/install-driver.sh`, and record this check as not run.
 2. **Device topology.**
    `swift run seiren-probe inputs` lists `Seiren FX` and `Seiren Stream Mix` with `streams: 1 in / 0 out`, and prints `Seiren FX installed: yes`.
