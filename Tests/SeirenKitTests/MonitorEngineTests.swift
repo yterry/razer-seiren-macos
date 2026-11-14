@@ -538,6 +538,25 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertFalse(MonitorEngine.shouldRunStandby(mode: .auto, source: pro, fxInstalled: true, allowed: false))
     }
 
+    func testRepeatedStandbyStartFailureIsLoggedOncePerDistinctFailure() {
+        var filter = MonitorEngine.StandbyFailureFilter()
+        let refused = "start refused: could not disable input streams status=-50"
+        let startFailed = "start failed: AudioDeviceStart status=-50"
+
+        XCTAssertTrue(filter.shouldLog(refused, uid: "seiren-a"))
+        for _ in 0..<5 { XCTAssertFalse(filter.shouldLog(refused, uid: "seiren-a")) }
+
+        XCTAssertTrue(filter.shouldLog(startFailed, uid: "seiren-a"), "a different failure logs")
+        XCTAssertFalse(filter.shouldLog(startFailed, uid: "seiren-a"))
+        XCTAssertTrue(filter.shouldLog(startFailed, uid: "seiren-b"), "the same failure on another device logs")
+        XCTAssertFalse(filter.shouldLog(startFailed, uid: "seiren-b"))
+        XCTAssertTrue(filter.shouldLog(refused, uid: "seiren-b"), "returning to an earlier failure logs")
+
+        filter.reset()
+        XCTAssertTrue(filter.shouldLog(refused, uid: "seiren-b"), "a successful start or a reset logs again")
+        XCTAssertFalse(filter.shouldLog(refused, uid: "seiren-b"))
+    }
+
     func testStandbyHostPermissionAndShutdownWithNoDevice() {
         let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
         engine.setMode(.auto)

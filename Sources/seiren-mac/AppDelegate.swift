@@ -927,20 +927,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     @objc private func systemDidWake() {
+        EventLog.shared.log(category: .system, message: "system woke")
         systemAsleep = false
         updateStandbyAllowed()
         lighting.reassert()
     }
 
     @objc private func standbyConditionChanged(_ note: Notification) {
+        let event: EventLog.Message
         switch note.name {
-        case NSWorkspace.screensDidSleepNotification: screensAsleep = true
-        case NSWorkspace.screensDidWakeNotification: screensAsleep = false
-        case NSWorkspace.willSleepNotification: systemAsleep = true
-        case NSWorkspace.sessionDidResignActiveNotification: sessionInactive = true
-        case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false
+        case NSWorkspace.screensDidSleepNotification: screensAsleep = true; event = "screens slept"
+        case NSWorkspace.screensDidWakeNotification: screensAsleep = false; event = "screens woke"
+        case NSWorkspace.willSleepNotification: systemAsleep = true; event = "system will sleep"
+        case NSWorkspace.sessionDidResignActiveNotification: sessionInactive = true; event = "session resigned active"
+        case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false; event = "session became active"
         default: return
         }
+        EventLog.shared.log(category: .system, message: event)
         updateStandbyAllowed()
     }
 
@@ -1052,11 +1055,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         case kIOHIDAccessTypeDenied: inputMonitoring = "denied"
         default: inputMonitoring = "unknown"
         }
-        // The event log does not exist yet, so there is no history to add.
         return DiagnosticsSnapshot(versions: versions, engine: engineState,
                                    devices: AudioDevices.diagnosticsDevices(), mixer: mixerState,
                                    lighting: lightingState, microphoneAccess: microphone,
-                                   inputMonitoringAccess: inputMonitoring, history: [])
+                                   inputMonitoringAccess: inputMonitoring,
+                                   history: EventLog.shared.recent.map(\.description))
     }
 
     static var appVersion: String {
