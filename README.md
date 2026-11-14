@@ -110,7 +110,7 @@ Released zips ship with a **SHA-256 checksum** so you can verify the download.
    If you miss the prompt, the menu says **Microphone access is required** and offers **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone** for you.
 5. Speak.
    You should hear yourself in the headphones.
-   Drag the **Level** slider to taste.
+   Drag the **Volume** slider to taste.
 
 That's it - your choice is remembered, auto-starts when you plug the Seiren back in, and quietly waits when it's unplugged.
 Then shape and clean your voice under **🎙 → Voice**, and install **Seiren FX** to send the processed voice to other apps (see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx)).
