@@ -513,7 +513,7 @@ public final class MonitorEngine {
     private var standbyDeviceUID: String?
     private static var standbyRejectedUIDs: Set<String> = []
     private var standbyValidationTimer: Timer?
-    private var lastStandbyFailure: String?
+    private var standbyFailures = StandbyFailureFilter()
 
     /// The EQ. Coefficients are pushed to the C DSP core; the route IOProc reads
     /// them on the RT thread. EQ only takes effect on the creator (aggregate)
@@ -771,7 +771,7 @@ public final class MonitorEngine {
             else if source == nil { reason = "device gone" }
             else if !fxInstalled { reason = "FX unavailable" }
             else { reason = "source has no Seiren headphone output" }
-            lastStandbyFailure = nil
+            standbyFailures.reset()
             stopStandby(reason: reason)
             return
         }
@@ -816,17 +816,30 @@ public final class MonitorEngine {
         standbyDeviceUID = device.uid
         standbyProcID = pid
         isStandbyRunning = true
-        lastStandbyFailure = nil
+        standbyFailures.reset()
         EventLog.shared.log(category: .standby, message: "start: Auto Seiren with FX, host allowed uid=\(private: device.uid)")
         validateStandbyInput()
         scheduleStandbyValidation()
     }
 
     private func logStandbyFailure(_ failure: String, uid: String) {
-        let key = uid + "\n" + failure
-        guard key != lastStandbyFailure else { return }
-        lastStandbyFailure = key
+        guard standbyFailures.shouldLog(failure, uid: uid) else { return }
         EventLog.shared.log(category: .standby, message: "\(failure)")
+    }
+
+    /// Auto polls retry a failed standby start every 1.5 s. Logging only a
+    /// failure that differs from the previous one keeps a stuck failure to one
+    /// entry. Reset it when standby starts or should no longer run.
+    struct StandbyFailureFilter {
+        private var last: (failure: String, uid: String)?
+
+        mutating func shouldLog(_ failure: String, uid: String) -> Bool {
+            if let last, last.failure == failure, last.uid == uid { return false }
+            last = (failure, uid)
+            return true
+        }
+
+        mutating func reset() { last = nil }
     }
 
     /// Standby must never light the microphone indicator. With the route off,
