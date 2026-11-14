@@ -513,6 +513,7 @@ public final class MonitorEngine {
     private var standbyDeviceUID: String?
     private static var standbyRejectedUIDs: Set<String> = []
     private var standbyValidationTimer: Timer?
+    private var lastStandbyFailure: String?
 
     /// The EQ. Coefficients are pushed to the C DSP core; the route IOProc reads
     /// them on the RT thread. EQ only takes effect on the creator (aggregate)
@@ -770,6 +771,7 @@ public final class MonitorEngine {
             else if source == nil { reason = "device gone" }
             else if !fxInstalled { reason = "FX unavailable" }
             else { reason = "source has no Seiren headphone output" }
+            lastStandbyFailure = nil
             stopStandby(reason: reason)
             return
         }
@@ -785,7 +787,7 @@ public final class MonitorEngine {
         var pid: AudioDeviceIOProcID?
         let created = AudioDeviceCreateIOProcID(device.id, standbyIOProc, nil, &pid)
         guard created == noErr, let pid else {
-            EventLog.shared.log(category: .standby, message: "start failed: create IOProc status=\(created)")
+            logStandbyFailure("start failed: create IOProc status=\(created)", uid: device.uid)
             return
         }
         let inputCount = AudioDevices.streamCount(device.id, scope: kAudioObjectPropertyScopeInput)
@@ -794,29 +796,37 @@ public final class MonitorEngine {
             scope: kAudioObjectPropertyScopeInput, enabled: Array(repeating: false, count: inputCount))
         guard inputs == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            EventLog.shared.log(category: .standby, message: "start refused: could not disable input streams status=\(inputs)")
+            logStandbyFailure("start refused: could not disable input streams status=\(inputs)", uid: device.uid)
             return
         }
         let outputs = AudioDevices.setIOProcStreamUsage(device.id, proc: pid,
             scope: kAudioObjectPropertyScopeOutput, enabled: Array(repeating: true, count: outputCount))
         guard outputs == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            EventLog.shared.log(category: .standby, message: "start failed: enable output streams status=\(outputs)")
+            logStandbyFailure("start failed: enable output streams status=\(outputs)", uid: device.uid)
             return
         }
         let started = AudioDeviceStart(device.id, pid)
         guard started == noErr else {
             AudioDeviceDestroyIOProcID(device.id, pid)
-            EventLog.shared.log(category: .standby, message: "start failed: AudioDeviceStart status=\(started)")
+            logStandbyFailure("start failed: AudioDeviceStart status=\(started)", uid: device.uid)
             return
         }
         standbyDeviceID = device.id
         standbyDeviceUID = device.uid
         standbyProcID = pid
         isStandbyRunning = true
+        lastStandbyFailure = nil
         EventLog.shared.log(category: .standby, message: "start: Auto Seiren with FX, host allowed uid=\(private: device.uid)")
         validateStandbyInput()
         scheduleStandbyValidation()
+    }
+
+    private func logStandbyFailure(_ failure: String, uid: String) {
+        let key = uid + "\n" + failure
+        guard key != lastStandbyFailure else { return }
+        lastStandbyFailure = key
+        EventLog.shared.log(category: .standby, message: "\(failure)")
     }
 
     /// Standby must never light the microphone indicator. With the route off,
@@ -1006,9 +1016,15 @@ public final class MonitorEngine {
         routeStartedAt = startTime
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.routeStartedAt == startTime, gDiagFirstInputTime >= startTime else { return }
-                let delay = Self.elapsedMilliseconds(since: startTime, until: gDiagFirstInputTime)
-                EventLog.shared.log(category: .route, message: "first non-zero mic sample: \(String(format: "%.3f", delay)) ms after AudioDeviceStart")
+                guard let self, self.routeStartedAt == startTime else { return }
+                if gDiagFirstInputTime >= startTime {
+                    let delay = Self.elapsedMilliseconds(since: startTime, until: gDiagFirstInputTime)
+                    EventLog.shared.log(category: .route, message: "first non-zero mic sample: \(String(format: "%.3f", delay)) ms after AudioDeviceStart")
+                } else if Self.elapsedMilliseconds(since: startTime) >= 10_000 {
+                    EventLog.shared.log(category: .route, message: "no non-zero mic sample within 10 s of AudioDeviceStart")
+                } else {
+                    return
+                }
                 self.startupLogTimer?.invalidate()
                 self.startupLogTimer = nil
                 self.routeStartedAt = nil

@@ -32,6 +32,22 @@ final class LightingControllerTests: XCTestCase {
         XCTAssertEqual(recorder.changes, 1)
     }
 
+    func testRepeatedLightingErrorIsLoggedOnce() throws {
+        let controller = LightingController()
+        let marker = "lighting test start \(UUID())"
+        EventLog.shared.log(category: .system, message: "\(marker)")
+
+        controller.apply(LightingState(effect: .static, color: RGB(0, 255, 0), brightnessPercent: 80))
+        controller.apply(LightingState(effect: .spectrum))
+        controller.reassert()
+
+        XCTAssertEqual(controller.lastError, .noDevice)
+        let recent = EventLog.shared.recent
+        let start = try XCTUnwrap(recent.lastIndex { $0.message == marker })
+        let added = recent[(start + 1)...].filter { $0.category == .lighting }
+        XCTAssertEqual(added.map(\.message), ["error: noDevice"])
+    }
+
     func testReassertBeforeAnyUserChoiceIsANoOp() {
         // The "never touch an unconfigured device" contract: waking the Mac
         // must not make the app start driving lights nobody asked it to.

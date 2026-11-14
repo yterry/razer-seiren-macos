@@ -343,8 +343,10 @@ public final class MixerEngine {
         }
         guard #available(macOS 14.2, *) else { return }
         guard let ownProcess = AudioDevices.ownProcessObject() else {
-            EventLog.shared.log(category: .mixer, message:
-                "start failed: no process object status=\(kAudioHardwareBadObjectError)")
+            if state != .failed(kAudioHardwareBadObjectError) {
+                EventLog.shared.log(category: .mixer, message:
+                    "start failed: no process object status=\(kAudioHardwareBadObjectError)")
+            }
             teardown(); state = .failed(kAudioHardwareBadObjectError)
             return
         }
