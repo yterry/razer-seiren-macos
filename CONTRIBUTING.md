@@ -38,9 +38,9 @@ So the most useful thing you can do is **tell us your model works** (or doesn't)
    layout the aggregate produced, and the mic's peak level - that output is
    what to paste in an issue.
 2. **Open a [device report](https://github.com/yterry/razer-seiren-macos/issues/new?template=device-report.yml)**.
-   It asks for the model, whether it has a headphone jack, which features work,
-   and the text from **Copy Diagnostics** in the Seiren menu. If you built from
-   source, add the `seiren-probe` output there too.
+   The form lists what to include, such as the text from **Copy Diagnostics** in
+   the Seiren menu. If you built from source, add the `seiren-probe` output
+   there too.
 
 ### When a model needs more than the name match
 
