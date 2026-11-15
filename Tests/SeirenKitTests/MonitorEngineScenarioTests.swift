@@ -5,7 +5,7 @@ import CoreAudio
 /// The plug, unplug, sleep, wake and driver-restart sequences users hit,
 /// run end to end on `FakeAudioHardware` and `FakeClock`. Each test checks
 /// the engine state, the active source, and the hardware calls, then shuts
-/// the engine down and checks that nothing is left behind in the fake.
+/// the engine down and checks that nothing is left behind in the fakes.
 @MainActor
 final class MonitorEngineScenarioTests: XCTestCase {
     private typealias Device = FakeAudioHardware.Device
@@ -477,6 +477,258 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    // MARK: Seiren FX start fails and direct monitoring runs in its place
+
+    func testFailedSeirenFXStartFallsBackToDirectMonitoringAndRecoversAfterBackoff() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        let monitor = IOProc(kind: .monitor, device: seiren.id)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRoutingThroughFX)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertEqual(hardware.runningIOProcs, [monitor])
+        XCTAssertTrue(hardware.aggregates.isEmpty, "the failed attempt must not leave its aggregate")
+
+        // A hardware event inside the backoff must not start early.
+        let mark = hardware.calls.count
+        clock.advance(by: 2)
+        hardware.fireDevicesChanged()
+        clock.advance(by: 2.5)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+
+        clock.advance(by: 0.5)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(aggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(route), .startIOProc(route),
+            .stopIOProc(monitor), .destroyIOProc(monitor),
+        ], "the headphones must keep their monitor until Seiren FX has started")
+        XCTAssertEqual(hardware.runningIOProcs, [route])
+        XCTAssertEqual(hardware.listenedProperties.filter { if case .sampleRate = $0 { true } else { false } },
+                       [.sampleRate(aggregate)])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testRepeatedSeirenFXStartFailuresBackOffAndKeepDirectMonitoring() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let failure = kAudioHardwareUnspecifiedError
+        // The first Seiren FX start, the direct start that follows, then four retries.
+        hardware.startResults = [failure, noErr, failure, failure, failure, failure]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        let monitor = IOProc(kind: .monitor, device: seiren.id)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.fxRouteFailure, failure)
+
+        for delay in [5.0, 10, 20, 60] {
+            let mark = hardware.calls.count
+            clock.advance(by: delay - 0.5)
+            XCTAssertEqual(lifecycleCalls(hardware, since: mark), [], "no attempt before \(delay) s")
+
+            clock.advance(by: 0.5)
+            let attempt = lifecycleCalls(hardware, since: mark)
+            guard case .createAggregate(let aggregate, _)? = attempt.first else {
+                return XCTFail("after \(delay) s the attempt must start with the aggregate: \(attempt)")
+            }
+            let route = IOProc(kind: .route, device: aggregate)
+            XCTAssertEqual(attempt, [
+                .createAggregate(aggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+                .createIOProc(route), .startIOProc(route),
+                .destroyIOProc(route), .destroyAggregate(aggregate),
+            ], "after \(delay) s")
+            XCTAssertEqual(engine.state, .running)
+            XCTAssertEqual(engine.fxRouteFailure, failure)
+            XCTAssertTrue(engine.isRetryScheduled)
+            XCTAssertEqual(hardware.runningIOProcs, [monitor])
+            XCTAssertTrue(hardware.aggregates.isEmpty)
+        }
+
+        // The delay stays at 60 s, and the next start succeeds.
+        let mark = hardware.calls.count
+        clock.advance(by: 59.5)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        clock.advance(by: 0.5)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .route, device: aggregate)])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testAggregateUIDAlreadyTakenFallsBackToDirectMonitoringAndRetries() throws {
+        // A second copy of the app holds the aggregate's fixed UID.
+        let taken = Device(id: 40, uid: MonitorEngine.aggregateUID, name: "Seiren Voice",
+                           inputStreams: 2, outputStreams: 2, isHidden: true, isVirtual: true)
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder, taken])
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        let monitor = IOProc(kind: .monitor, device: seiren.id)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRoutingThroughFX)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware), [.createIOProc(monitor), .startIOProc(monitor)])
+
+        // Still taken at the first retry: direct monitoring goes on untouched.
+        var mark = hardware.calls.count
+        clock.advance(by: 5)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        // The other copy quits; the second retry is due 10 s after the first.
+        hardware.devices.removeAll { $0.id == taken.id }
+        mark = hardware.calls.count
+        clock.advance(by: 10)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(aggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(route), .startIOProc(route),
+            .stopIOProc(monitor), .destroyIOProc(monitor),
+        ])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testRetryNowStartsSeirenFXWithoutWaitingForTheBackoff() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        engine.setMode(.always)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+
+        clock.advance(by: 1)
+        engine.retryNow()
+
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .route, device: aggregate)])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testModeOffClearsTheSeirenFXRouteFailureAndItsRetry() {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        engine.setMode(.always)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        engine.setMode(.off)
+        XCTAssertEqual(engine.state, .stopped)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let mark = hardware.calls.count
+        clock.advance(by: 60)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testShutdownClearsTheSeirenFXRouteFailureAndItsRetry() {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        engine.setMode(.always)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+
+        assertShutdownLeavesNothing(engine, hardware)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+    }
+
+    func testUnpluggingTheSeirenClearsTheFailureAndTheNextStartIsNotDelayed() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        engine.setMode(.always)
+        XCTAssertEqual(engine.fxRouteFailure, kAudioHardwareUnspecifiedError)
+
+        unplug(seiren, from: hardware)
+        XCTAssertEqual(engine.state, .noDevice)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+
+        // Back inside what was the backoff: the route starts at once.
+        clock.advance(by: 1)
+        plug(seiren, into: hardware)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .route, device: aggregate)])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testSeirenFXRouteFailureIsLoggedOncePerDistinctStatusAndOnceOnRecovery() {
+        let marker = "scenario \(UUID().uuidString)"
+        EventLog.shared.log(category: .system, message: "\(marker)")
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let first = kAudioHardwareUnspecifiedError
+        let second = kAudioHardwareNotRunningError
+        // The first Seiren FX start, the direct start, then three retries.
+        hardware.startResults = [first, noErr, first, first, second]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+
+        engine.setMode(.always)
+        clock.advance(by: 5)
+        clock.advance(by: 10)
+        clock.advance(by: 20)
+        XCTAssertEqual(engine.fxRouteFailure, second)
+        clock.advance(by: 60)
+        XCTAssertNil(engine.fxRouteFailure)
+
+        let recent = EventLog.shared.recent
+        let start = recent.lastIndex { $0.message == marker } ?? recent.startIndex
+        let route = recent[start...].filter { $0.category == .route }.map(\.message)
+        XCTAssertEqual(route.filter { $0.hasPrefix("fx route") }, [
+            "fx route failed status=\(first); direct monitoring continues",
+            "fx route failed status=\(second); direct monitoring continues",
+            "fx route recovered",
+        ])
+        XCTAssertEqual(route.filter { $0.hasPrefix("start failed") }.count, 1,
+                       "a retry that fails must not add an entry of its own: \(route)")
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDirectMonitoringWithoutSeirenFXSetsNoFailureAndSchedulesNoRetry() {
+        let hardware = FakeAudioHardware(devices: [seiren])
+        let engine = makeEngine(on: hardware)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRoutingThroughFX)
+        XCTAssertNil(engine.fxRouteFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let mark = hardware.calls.count
+        clock.advance(by: 120)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     // MARK: Helpers
 
     private func makeEngine(on hardware: FakeAudioHardware,
@@ -533,6 +785,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
         XCTAssertTrue(hardware.aggregates.isEmpty, "aggregates left: \(hardware.aggregates)", file: file, line: line)
         XCTAssertTrue(hardware.listenedProperties.isEmpty,
                       "listeners left: \(hardware.listenedProperties)", file: file, line: line)
+        XCTAssertEqual(clock.pendingTimerCount, 0, "timers left", file: file, line: line)
 
         var createdProcs: [IOProc: Int] = [:]
         var destroyedProcs: [IOProc: Int] = [:]

@@ -16,10 +16,15 @@ final class StatusItemTests: XCTestCase {
             (.stopped, "mic"),
         ]
         for (state, symbol) in expected {
-            XCTAssertEqual(AppDelegate.statusSymbolName(for: state), symbol, "\(state)")
+            XCTAssertEqual(AppDelegate.statusSymbolName(for: state, fxRouteFailed: false), symbol, "\(state)")
             XCTAssertNotNil(NSImage(systemSymbolName: symbol, accessibilityDescription: nil), symbol)
         }
     }
+
+    func testRunningWithAFailedSeirenFXRouteUsesCrossedOutMic() {
+        XCTAssertEqual(AppDelegate.statusSymbolName(for: .running, fxRouteFailed: true), "mic.badge.xmark")
+    }
+
     func testStatusImageIsDescribedByTheStatusLine() throws {
         let cases: [(MonitorEngine.State, String)] = [
             (.running, "Monitoring: Seiren"),
@@ -31,7 +36,8 @@ final class StatusItemTests: XCTestCase {
             (.failed(-1), "Couldn't start audio"),
         ]
         for (state, status) in cases {
-            let image = try XCTUnwrap(AppDelegate.statusButtonImage(for: state, status: status), "\(state)")
+            let image = try XCTUnwrap(AppDelegate.statusButtonImage(for: state, fxRouteFailed: false, status: status),
+                                      "\(state)")
             XCTAssertEqual(image.accessibilityDescription, status, "\(state)")
             XCTAssertTrue(image.isTemplate, "\(state)")
         }

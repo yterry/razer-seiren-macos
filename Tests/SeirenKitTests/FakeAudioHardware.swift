@@ -271,6 +271,9 @@ final class FakeClock: EngineClock {
     private(set) var uptime: TimeInterval = 1000
     private var timers: [FakeTimer] = []
 
+    /// Timers scheduled and neither cancelled nor, for one-shot timers, fired.
+    var pendingTimerCount: Int { timers.filter { !$0.isCancelled }.count }
+
     func schedule(after interval: TimeInterval, repeats: Bool,
                   _ action: @escaping @MainActor @Sendable () -> Void) -> any EngineTimer {
         precondition(!repeats || interval > 0, "a repeating timer needs a positive interval")

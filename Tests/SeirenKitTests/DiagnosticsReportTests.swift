@@ -12,12 +12,14 @@ final class DiagnosticsReportTests: XCTestCase {
     private func snapshot(devices: [DiagnosticsSnapshot.Device] = [], history: [String] = [],
                           activeSource: MonitorEngine.InputDevice? = nil,
                           inputPreference: MonitorEngine.InputPreference = .automatic,
+                          fxRouteFailure: Int32? = nil,
                           mixerState: MixerEngine.State = .off) -> DiagnosticsSnapshot {
         DiagnosticsSnapshot(
             versions: .init(app: "1.2.0", macOS: "Version 15.1 (Build 24B83)", architecture: "arm64",
                             installedFX: "1.1.0", bundledFX: "1.2.0", reinstallOffered: false, updateOffered: true),
             engine: .init(mode: .auto, state: .running, inputPreference: inputPreference,
-                          activeSource: activeSource, routesThroughFX: true, standbyRunning: false,
+                          activeSource: activeSource, routesThroughFX: fxRouteFailure == nil,
+                          fxRouteFailure: fxRouteFailure, standbyRunning: false,
                           route: .init(callbacks: 1200, inputBuffers: 2, outputBuffers: 3, monitorBuffers: 1,
                                        inputPeak: 0.5, sampleRate: 48000),
                           recordingBundleIDs: ["us.zoom.xos"]),
@@ -41,6 +43,14 @@ final class DiagnosticsReportTests: XCTestCase {
         XCTAssertEqual(positions.compactMap { $0 }, positions.compactMap { $0 }.sorted())
         XCTAssertTrue(report.contains("  Recording apps: us.zoom.xos"))
         XCTAssertTrue(report.contains("  No event history recorded."))
+    }
+
+    func testEngineSectionReportsTheSeirenFXRouteFailure() {
+        let healthy = DiagnosticsReport.render(snapshot())
+        XCTAssertTrue(healthy.contains("  Through Seiren FX: yes\n  Seiren FX route failure: none\n"))
+
+        let degraded = DiagnosticsReport.render(snapshot(fxRouteFailure: -66681))
+        XCTAssertTrue(degraded.contains("  Through Seiren FX: no\n  Seiren FX route failure: -66681\n"))
     }
 
     func testOtherDevicesAreListedByTransportInsteadOfName() {

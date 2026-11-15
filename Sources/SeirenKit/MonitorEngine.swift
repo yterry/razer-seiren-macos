@@ -259,6 +259,8 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
 /// when the authorization may have changed outside the app.
 /// A start that ends in `.failed` also schedules one reconcile for the moment
 /// its backoff expires (`startRetryDelay`), so it recovers with no hardware event.
+/// A Seiren FX start that fails while direct monitoring comes up in its place
+/// sets `fxRouteFailure` and is retried with the same backoff.
 ///
 /// Threading: this is a `@MainActor` type. All public API and Core Audio device
 /// management runs on the main thread. The only RT-thread code is the
@@ -413,6 +415,20 @@ public final class MonitorEngine {
     /// monitor fallback). EQ and broadcast are effective only when this is true.
     public private(set) var isRoutingThroughFX = false {
         didSet { if isRoutingThroughFX != oldValue { notify() } }
+    }
+
+    /// The status of the last failed Seiren FX start while direct monitoring
+    /// runs in its place, nil otherwise. While it is set, apps recording
+    /// Seiren FX hear silence and the Seiren FX start is retried.
+    public private(set) var fxRouteFailure: Int32? {
+        didSet {
+            guard fxRouteFailure != oldValue else { return }
+            if let fxRouteFailure {
+                EventLog.shared.log(category: .route, message: "fx route failed status=\(fxRouteFailure); " +
+                    "direct monitoring continues")
+            }
+            notify()
+        }
     }
 
     public private(set) var isStandbyRunning = false {
@@ -876,8 +892,18 @@ public final class MonitorEngine {
         if procID != nil, procSourceID == dev, procSourceUID == selectedSource?.device.uid,
            procFXDeviceID == fx,
            let procDeviceID, hardware.isAlive(procDeviceID) {
-            clearStartFailure()
             state = .running
+            guard fxRouteFailure != nil, let fx else {
+                clearStartFailure()
+                return
+            }
+            // Direct monitoring is running in place of a failed Seiren FX
+            // start. Its backoff gates the retry the same way as a failed start.
+            if Self.shouldRetryStart(sourceID: dev, fxDeviceID: fx, failure: startFailure, now: clock.uptime) {
+                retryFXRoute(source: dev, fx: fx)
+            } else if !isRetryScheduled {
+                scheduleStartRetry()
+            }
             return
         }
         // Aggregate creation/destruction fires the devices listener too. Every
@@ -892,10 +918,12 @@ public final class MonitorEngine {
         procSourceUID = selectedSource?.device.uid
         procFXDeviceID = fx
         let previousFailure = startFailure
-        startProc(on: dev)
-        // Initial sample-rate validation can already record a restart failure.
-        // Count that failed start once, even when it happens inside startProc.
-        if startFailure == previousFailure {
+        let fxFailure = startProc(on: dev)
+        if state == .running, let fxFailure {
+            recordFXRouteFailure(fxFailure, sourceID: dev, fxDeviceID: fx)
+        } else if startFailure == previousFailure {
+            // Initial sample-rate validation can already record a restart failure.
+            // Count that failed start once, even when it happens inside startProc.
             recordStartResult(state, sourceID: dev, fxDeviceID: fx)
         }
     }
@@ -907,9 +935,87 @@ public final class MonitorEngine {
         state = result
     }
 
+    /// Direct monitoring runs, but the Seiren FX start returned `status`.
+    /// Counts the failure and schedules the next Seiren FX start.
+    private func recordFXRouteFailure(_ status: OSStatus, sourceID: AudioObjectID, fxDeviceID: AudioObjectID?) {
+        startFailure = StartFailure.recording(result: .failed(status), sourceID: sourceID, fxDeviceID: fxDeviceID,
+                                              now: clock.uptime, previous: startFailure)
+        scheduleStartRetry()
+        fxRouteFailure = status
+    }
+
+    /// A Seiren FX route that has started but is not yet the engine's route.
+    private struct FXRoute {
+        var aggregate: AudioObjectID
+        var proc: AudioDeviceIOProcID
+        var aggregateMS: Double
+        var startTime: UInt64
+        var startMS: Double
+    }
+
+    private enum FXRouteStart {
+        case started(FXRoute)
+        /// `AudioDeviceStart` returned a status that probably means no microphone access.
+        case permissionDenied(OSStatus)
+        case failed(OSStatus)
+    }
+
+    /// Creates the aggregate and starts `routeIOProc` on it. A failed start
+    /// destroys what it created. A retry passes `logsFailure: false`, because
+    /// `fxRouteFailure` logs a repeated failure once.
+    private func startFXRoute(source: AudioObjectID, fx: AudioObjectID, logsFailure: Bool) -> FXRouteStart {
+        let aggregateStart = mach_absolute_time()
+        let aggregate = createAggregate(source: source, fx: fx)
+        let aggregateMS = Self.elapsedMilliseconds(since: aggregateStart)
+        guard let agg = aggregate else {
+            if logsFailure {
+                EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms")
+            }
+            return .failed(kAudioHardwareUnspecifiedError)
+        }
+        hardware.setBufferFrameSize(agg, preferredBufferFrames)
+        configureSampleRate(hardware.nominalRate(agg))
+
+        let (created, createdID) = hardware.createIOProc(on: agg, routeIOProc)
+        guard created == noErr, let pid = createdID else {
+            if logsFailure {
+                EventLog.shared.log(category: .route, message: "start failed: create IOProc status=\(created) " +
+                    "createAggregate=\(aggregateMS) ms")
+            }
+            hardware.destroyAggregateDevice(agg)
+            return .failed(created)
+        }
+        let startTime = mach_absolute_time()
+        let started = hardware.startIOProc(pid, on: agg)
+        let startMS = Self.elapsedMilliseconds(since: startTime)
+        guard started == noErr else {
+            hardware.destroyIOProc(pid, on: agg)
+            if logsFailure {
+                EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms " +
+                    "AudioDeviceStart=\(startMS) ms status=\(started)")
+            }
+            hardware.destroyAggregateDevice(agg)
+            return isProbablyPermissionError(started) ? .permissionDenied(started) : .failed(started)
+        }
+        return .started(FXRoute(aggregate: agg, proc: pid, aggregateMS: aggregateMS,
+                                startTime: startTime, startMS: startMS))
+    }
+
+    private func adoptFXRoute(_ route: FXRoute) {
+        procID = route.proc
+        procDeviceID = route.aggregate
+        aggregateID = route.aggregate
+        isRoutingThroughFX = true
+        state = .running
+        logRouteStart(aggregateMS: route.aggregateMS, startTime: route.startTime, startMS: route.startMS)
+        installSampleRateListener(on: route.aggregate)
+    }
+
     /// All sources use the aggregate for FX. Only a headphone-equipped Seiren
     /// can fall back to direct monitoring if FX is missing or fails to start.
-    private func startProc(on source: AudioObjectID) {
+    /// Returns the status of the failed Seiren FX start when direct monitoring
+    /// started in its place.
+    private func startProc(on source: AudioObjectID) -> OSStatus? {
         Self.ensureScratch()
         resetDiagnostics()
         let outputStreams = hardware.streamCount(source, scope: kAudioObjectPropertyScopeOutput)
@@ -921,46 +1027,15 @@ public final class MonitorEngine {
         // --- Creator path: route through SeirenFX -----------------------------
         var fxFailure: OSStatus?   // why the FX route didn't come up, if it didn't
         if let fx = procFXDeviceID {
-            let aggregateStart = mach_absolute_time()
-            let aggregate = createAggregate(source: source, fx: fx)
-            let aggregateMS = Self.elapsedMilliseconds(since: aggregateStart)
-            if let agg = aggregate {
-                hardware.setBufferFrameSize(agg, preferredBufferFrames)
-                configureSampleRate(hardware.nominalRate(agg))
-
-                let (created, createdID) = hardware.createIOProc(on: agg, routeIOProc)
-                if created == noErr, let pid = createdID {
-                    let startTime = mach_absolute_time()
-                    let started = hardware.startIOProc(pid, on: agg)
-                    let startMS = Self.elapsedMilliseconds(since: startTime)
-                    if started == noErr {
-                        procID = pid
-                        procDeviceID = agg
-                        aggregateID = agg
-                        isRoutingThroughFX = true
-                        state = .running
-                        logRouteStart(aggregateMS: aggregateMS, startTime: startTime, startMS: startMS)
-                        installSampleRateListener(on: agg)
-                        return
-                    }
-                    hardware.destroyIOProc(pid, on: agg)
-                    EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms " +
-                        "AudioDeviceStart=\(startMS) ms status=\(started)")
-                    if isProbablyPermissionError(started) {
-                        hardware.destroyAggregateDevice(agg)
-                        state = .permissionDenied
-                        return
-                    }
-                    fxFailure = started   // non-permission failure → try direct
-                } else {
-                    EventLog.shared.log(category: .route, message: "start failed: create IOProc status=\(created) " +
-                        "createAggregate=\(aggregateMS) ms")
-                    fxFailure = created
-                }
-                hardware.destroyAggregateDevice(agg)
-            } else {
-                EventLog.shared.log(category: .route, message: "start failed: createAggregate=\(aggregateMS) ms")
-                fxFailure = kAudioHardwareUnspecifiedError
+            switch startFXRoute(source: source, fx: fx, logsFailure: true) {
+            case .started(let route):
+                adoptFXRoute(route)
+                return nil
+            case .permissionDenied:
+                state = .permissionDenied
+                return nil
+            case .failed(let status):
+                fxFailure = status   // non-permission failure → try direct
             }
         }
 
@@ -969,7 +1044,7 @@ public final class MonitorEngine {
         guard gMonitorEnabled else {
             // Nothing to monitor to: the FX route was the only route.
             state = fxFailure.map { .failed($0) } ?? .needsFX
-            return
+            return nil
         }
         hardware.setBufferFrameSize(source, preferredBufferFrames)   // best-effort latency cut
         configureSampleRate(hardware.nominalRate(source))
@@ -978,22 +1053,52 @@ public final class MonitorEngine {
         guard created == noErr, let pid = createdID else {
             state = .failed(created)
             EventLog.shared.log(category: .route, message: "direct start failed: create IOProc status=\(created)")
-            return
+            return nil
         }
         let startTime = mach_absolute_time()
         let started = hardware.startIOProc(pid, on: source)
         let startMS = Self.elapsedMilliseconds(since: startTime)
-        if started == noErr {
-            procID = pid
-            procDeviceID = source
-            state = .running
-            logRouteStart(aggregateMS: nil, startTime: startTime, startMS: startMS)
-            installSampleRateListener(on: source)
-        } else {
+        guard started == noErr else {
             hardware.destroyIOProc(pid, on: source)
             state = isProbablyPermissionError(started)
                 ? .permissionDenied : .failed(started)
             EventLog.shared.log(category: .route, message: "direct start failed: AudioDeviceStart=\(startMS) ms status=\(started)")
+            return nil
+        }
+        procID = pid
+        procDeviceID = source
+        state = .running
+        logRouteStart(aggregateMS: nil, startTime: startTime, startMS: startMS)
+        installSampleRateListener(on: source)
+        return fxFailure
+    }
+
+    /// Starts the Seiren FX route while direct monitoring keeps the headphones
+    /// live, and stops the direct IOProc only once the Seiren FX IOProc has
+    /// started. A failed attempt leaves direct monitoring as it was.
+    private func retryFXRoute(source: AudioObjectID, fx: AudioObjectID) {
+        guard let directProc = procID, let directDevice = procDeviceID else { return }
+        // `monitorIOProc` reads no DSP state, so configuring the DSP for the
+        // attempt is safe while it runs. Both IOProcs write the diagnostics
+        // counters until the direct one stops, which only blurs a report.
+        resetDiagnostics()
+        switch startFXRoute(source: source, fx: fx, logsFailure: false) {
+        case .started(let route):
+            if let listener = sampleRateListener {
+                hardware.removeListener(listener)
+                sampleRateListener = nil
+            }
+            hardware.stopIOProc(directProc, on: directDevice)
+            hardware.destroyIOProc(directProc, on: directDevice)
+            clearStartFailure()
+            fxRouteFailure = nil
+            EventLog.shared.log(category: .route, message: "fx route recovered")
+            adoptFXRoute(route)
+        case .permissionDenied(let status), .failed(let status):
+            // Direct monitoring has the microphone open, so a status that could
+            // mean a denial is an ordinary failure here.
+            configureSampleRate(hardware.nominalRate(directDevice))
+            recordFXRouteFailure(status, sourceID: source, fxDeviceID: fx)
         }
     }
 
@@ -1050,6 +1155,12 @@ public final class MonitorEngine {
             aggregateID = nil
         }
         isRoutingThroughFX = false
+        if fxRouteFailure != nil {
+            // The backoff belonged to the Seiren FX retry on the route that
+            // just stopped, so it must not delay the next start.
+            fxRouteFailure = nil
+            startFailure = nil
+        }
         scheduleStandbyValidation()
     }
 

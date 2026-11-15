@@ -214,20 +214,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func configureStatusButtonImage() {
         guard let button = statusItem.button else { return }
         let status = statusLine()
-        button.image = Self.statusButtonImage(for: engine.state, status: status)
+        button.image = Self.statusButtonImage(for: engine.state, fxRouteFailed: engine.fxRouteFailure != nil,
+                                              status: status)
         button.appearsDisabled = (engine.mode == .off)
         button.toolTip = status
     }
 
     /// The status item's glyph for `state`, described by the status line so
     /// VoiceOver speaks the same text the menu and tooltip show.
-    static func statusButtonImage(for state: MonitorEngine.State, status: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: statusSymbolName(for: state), accessibilityDescription: status)
+    static func statusButtonImage(for state: MonitorEngine.State, fxRouteFailed: Bool, status: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: statusSymbolName(for: state, fxRouteFailed: fxRouteFailed),
+                            accessibilityDescription: status)
         image?.isTemplate = true
         return image
     }
 
-    static func statusSymbolName(for state: MonitorEngine.State) -> String {
+    /// `fxRouteFailed` is whether Seiren FX failed to start and direct
+    /// monitoring runs in its place, which needs the user's attention as well.
+    static func statusSymbolName(for state: MonitorEngine.State, fxRouteFailed: Bool) -> String {
+        if fxRouteFailed { return "mic.badge.xmark" }
         switch state {
         case .permissionDenied, .needsFX, .failed: return "mic.badge.xmark"
         case .running: return "waveform.and.mic"
@@ -263,6 +268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
+        if engine.fxRouteFailure != nil {
+            menu.addItem(disabledItem("Seiren FX couldn't start - apps using it hear silence"))
+        }
         if engine.state == .waiting, engine.activeSource?.isSeiren == false {
             menu.addItem(disabledItem("Starts when an app records from Seiren FX"))
         }
@@ -277,7 +285,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             menu.addItem(open)
         }
         if engine.state == .needsFX { addNeedsFXItems(to: menu) } else { addDriverUpdateItems(to: menu) }
-        if case .failed(let code) = engine.state {
+        let failureCode: OSStatus?
+        if case .failed(let code) = engine.state { failureCode = code } else { failureCode = engine.fxRouteFailure }
+        if let code = failureCode {
             menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
             let retry = NSMenuItem(title: "Try Again", action: #selector(retryAudio), keyEquivalent: "")
             retry.target = self
@@ -785,6 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
                 ? "Heard in your monitor + apps recording “Seiren FX”"
                 : "Heard by apps recording “Seiren FX”"
         }
+        if engine.fxRouteFailure != nil { return "Seiren FX couldn't start - the EQ isn't applied" }
         return engine.mode == .off
             ? "Turn monitoring on to apply the EQ"
             : "Applies once monitoring is active"
@@ -1290,8 +1301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         let engineState = DiagnosticsSnapshot.Engine(
             mode: engine.mode, state: engine.state, inputPreference: engine.inputPreference,
             activeSource: engine.activeSource, routesThroughFX: engine.isRoutingThroughFX,
-            standbyRunning: engine.isStandbyRunning, route: engine.routeDiagnostics,
-            recordingBundleIDs: engine.recordingBundleIDs)
+            fxRouteFailure: engine.fxRouteFailure, standbyRunning: engine.isStandbyRunning,
+            route: engine.routeDiagnostics, recordingBundleIDs: engine.recordingBundleIDs)
         let mixerState = DiagnosticsSnapshot.Mixer(
             enabled: mixer.isEnabled, availability: mixer.availability, state: mixer.state,
             channelCount: mixer.channels.count, diagnostics: mixer.diagnostics)
