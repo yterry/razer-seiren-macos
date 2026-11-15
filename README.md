@@ -99,6 +99,7 @@ Releases from **v1.1.0** on are **signed with an Apple Developer ID and notarize
 If you'd rather not trust a prebuilt binary anyway, [build it from source](#building-from-source) - the whole app is this repo, no dependencies.
 Released zips ship with a **SHA-256 checksum** so you can verify the download.
 (The old **v1.0.0** build predates the Developer ID and is unsigned; its one-time **Open Anyway** instructions live in that release's notes, and the Homebrew cask clears its quarantine flag automatically.)
+If you find a security problem, please report it privately as described in the [security policy](SECURITY.md).
 
 ### Updates
 

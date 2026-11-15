@@ -2,3 +2,6 @@ contact_links:
   - name: Troubleshooting
     url: https://github.com/yterry/razer-seiren-macos#troubleshooting
     about: Fixes for common problems, such as monitoring that won't turn on or apps that hear the wrong mic.
+  - name: Report a security vulnerability
+    url: https://github.com/yterry/razer-seiren-macos/security/policy
+    about: Report security problems privately. Please don't open a public issue.
