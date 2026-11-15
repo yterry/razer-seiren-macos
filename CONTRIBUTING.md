@@ -233,6 +233,14 @@ It runs `make test`, builds the universal app with `scripts/package.sh`, signs a
 The steps below are the ones a person does around that workflow.
 In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
 
+### Release notes
+
+The [releases page](https://github.com/yterry/razer-seiren-macos/releases) is the record of what changed in each version.
+A release's notes start with a fixed paragraph about installing, written by the workflow's "Write release notes" step.
+Below it, GitHub lists every pull request merged since the previous release, one line each: the pull request's title, its author and a link.
+No label, author or title prefix is left out of that list.
+Users read those titles as the list of changes, so title each pull request as a plain sentence about what changed, in the `type(scope): summary` form the repository already uses.
+
 ### Before tagging
 
 1. Run `make test` on the commit you will tag.
@@ -249,8 +257,8 @@ In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
    ```
    The run must pass.
    A signed dry run fails loudly when the `MACOS_CERT_P12` signing certificate secret is missing, instead of building ad-hoc.
-   Its summary shows the release notes a `vX.Y.Z` tag would publish.
-   They must say "Signed with a Developer ID and notarized by Apple".
+   Its summary shows the release notes a `vX.Y.Z` tag would publish: the install paragraph, and under "Preview generated release notes" the list of merged pull requests that goes below it.
+   The install paragraph must say "Signed with a Developer ID and notarized by Apple".
    The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment`, then the line `source=Notarized Developer ID`, and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
    That `source=Notarized Developer ID` line is the Gatekeeper evidence for the build.
    Quit any installed `Seiren.app` and unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`.
@@ -315,13 +323,12 @@ Once the cause is fixed, rerun the workflow with `gh run rerun <run-id>`.
 
 ### After the workflow
 
-1. **Add "What's new" to the release notes.**
-   The workflow publishes only the generated install text.
-   Put a `## What's new in vX.Y.Z` section and a `---` line above it:
+1. **Read the release notes.**
+   Read the generated notes on the release, and add a short summary above them if the release needs one, such as a change users must act on:
 
    ```sh
    gh release view vX.Y.Z --json body -q .body > notes.md
-   # edit notes.md: add "## What's new in vX.Y.Z", the changes, and "---" above the generated text
+   # edit notes.md: add the summary above the install paragraph
    gh release edit vX.Y.Z --notes-file notes.md
    ```
 
