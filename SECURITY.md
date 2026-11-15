@@ -27,7 +27,7 @@ In scope:
 
 - The Seiren menu bar app.
 - The Seiren FX audio driver.
-- The install and packaging scripts in `scripts/` and the Homebrew cask in `packaging/`.
+- The install and packaging scripts in `scripts/`.
 - The release workflow in `.github/workflows/release.yml`.
 
 Out of scope:
