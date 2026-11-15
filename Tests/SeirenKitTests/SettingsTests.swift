@@ -35,6 +35,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.mixerChannels, MixerEngine.defaultChannels)
         XCTAssertNil(settings.lightingState)
         XCTAssertTrue(settings.autoStandbyEnabled)
+        XCTAssertTrue(settings.updateCheckEnabled)
         XCTAssertEqual(defaults.integer(forKey: "schemaVersion"), Settings.currentSchema)
     }
 
@@ -161,6 +162,19 @@ final class SettingsTests: XCTestCase {
 
         defaults.removeObject(forKey: "auto.standbyEnabled")
         XCTAssertTrue(Settings(defaults).autoStandbyEnabled)
+    }
+
+    func testUpdateCheckReadsStoredValue() throws {
+        let defaults = try makeDefaults()
+
+        // What `defaults write ... updates.checkEnabled -bool <value>` stores.
+        for enabled in [false, true] {
+            defaults.set(enabled, forKey: "updates.checkEnabled")
+            XCTAssertEqual(Settings(defaults).updateCheckEnabled, enabled)
+        }
+
+        defaults.removeObject(forKey: "updates.checkEnabled")
+        XCTAssertTrue(Settings(defaults).updateCheckEnabled)
     }
 
     func testModeRoundTrips() throws {
