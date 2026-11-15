@@ -164,11 +164,11 @@ public enum DiagnosticsReport {
         let r = e.route
         lines += ["Engine",
                   "  Mode: \(e.mode.rawValue)",
-                  "  State: \(e.state)",
+                  "  State: \(describe(e.state))",
                   "  Input preference: \(preference)",
                   "  Active source: \(source ?? "none")",
                   "  Through Seiren FX: \(yesNo(e.routesThroughFX))",
-                  "  Seiren FX route failure: \(e.fxRouteFailure.map(String.init) ?? "none")",
+                  "  Seiren FX route failure: \(e.fxRouteFailure.map(CoreAudioCode.errorDescription) ?? "none")",
                   "  Standby running: \(yesNo(e.standbyRunning))",
                   "  Recording apps: \(e.recordingBundleIDs.isEmpty ? "none" : e.recordingBundleIDs.joined(separator: ", "))",
                   "  Route: \(r.callbacks) callbacks, \(r.inputBuffers) in / \(r.outputBuffers) out buffers, " +
@@ -189,7 +189,7 @@ public enum DiagnosticsReport {
         lines += ["Mixer",
                   "  Enabled: \(yesNo(m.enabled))",
                   "  Availability: \(m.availability)",
-                  "  State: \(m.state)",
+                  "  State: \(describe(m.state))",
                   "  Channels: \(m.channelCount)"]
         if m.state == .running {
             let d = m.diagnostics
@@ -297,6 +297,16 @@ public enum DiagnosticsReport {
     // MARK: - Formatting
 
     private static func yesNo(_ value: Bool) -> String { value ? "yes" : "no" }
+
+    private static func describe(_ state: MonitorEngine.State) -> String {
+        if case .failed(let code) = state { return "failed, \(CoreAudioCode.errorDescription(code))" }
+        return "\(state)"
+    }
+
+    private static func describe(_ state: MixerEngine.State) -> String {
+        if case .failed(let code) = state { return "failed, \(CoreAudioCode.errorDescription(code))" }
+        return "\(state)"
+    }
 
     private static func dBFS(_ linear: Float) -> String {
         linear > 0 ? String(format: "%.1f dBFS", 20 * log10(linear)) : "silent"

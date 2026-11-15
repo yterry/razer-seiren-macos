@@ -57,28 +57,9 @@ extension AppDelegate {
         menu.addItem(.separator())
         let appChannels = mixer.channels.filter { if case .app = $0.source { return true }; return false }
         let add = NSMenuItem(title: "Add App", action: nil, keyEquivalent: "")
-        let apps = NSMenu()
-        apps.autoenablesItems = false
-        if appChannels.count >= MixerEngine.maxAppChannels {
-            apps.addItem(disabledItem("Up to 6 apps"))
-        } else {
-            let candidates = NSWorkspace.shared.runningApplications.filter { app in
-                guard app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-                      let id = app.bundleIdentifier, !MixerEngine.isWebAppShim(bundleID: id) else { return false }
-                return id != Bundle.main.bundleIdentifier && !appChannels.contains { $0.source == .app(bundleID: id) }
-            }.sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
-            var seen: Set<String> = []
-            for app in candidates {
-                guard let id = app.bundleIdentifier, seen.insert(id).inserted else { continue }
-                let choice = NSMenuItem(title: app.localizedName ?? id,
-                                        action: #selector(addMixerApp(_:)), keyEquivalent: "")
-                choice.target = self
-                choice.representedObject = id
-                choice.image = sizedMixerIcon(app.icon)
-                apps.addItem(choice)
-            }
-        }
-        add.submenu = apps
+        let atLimit = appChannels.count >= MixerEngine.maxAppChannels
+        add.submenu = Self.addAppMenu(atLimit ? [] : addableApps(excluding: appChannels), atLimit: atLimit,
+                                      target: self)
         menu.addItem(add)
         let remove = NSMenuItem(title: "Remove App", action: nil, keyEquivalent: "")
         let removing = NSMenu()
@@ -95,17 +76,73 @@ extension AppDelegate {
         remove.isHidden = appChannels.isEmpty
         menu.addItem(remove)
         menu.addItem(.separator())
-        switch mixer.state {
-        case .running: menu.addItem(disabledItem("Live · mixing into Seiren Stream Mix"))
-        case .failed(let code):
-            menu.addItem(disabledItem("Couldn't start the Stream Mixer"))
-            menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
-            let retry = NSMenuItem(title: "Try Again", action: #selector(retryMixer), keyEquivalent: "")
-            retry.target = self
-            menu.addItem(retry)
-        default: menu.addItem(disabledItem("Starts when an app records Seiren Stream Mix"))
+        for item in Self.mixerStateItems(state: mixer.state, voiceOff: engine.mode == .off, target: self) {
+            menu.addItem(item)
         }
-        if engine.mode == .off { menu.addItem(disabledItem("Voice is silent while monitoring is Off")) }
+    }
+
+    /// The lines at the bottom of the Stream Mixer menu: what the mixer is
+    /// doing, and a note when monitoring is Off. A separator keeps that note
+    /// apart from the error block when the mixer failed.
+    static func mixerStateItems(state: MixerEngine.State, voiceOff: Bool, target: AnyObject?) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        switch state {
+        case .running: items.append(disabledItem("Live · mixing into Seiren Stream Mix"))
+        case .failed(let code):
+            items.append(disabledItem("Couldn't start the Stream Mixer"))
+            items.append(disabledItem(CoreAudioCode.errorDescription(code)))
+            let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryMixer), keyEquivalent: "")
+            retry.target = target
+            items.append(retry)
+        default: items.append(disabledItem("Starts when an app records Seiren Stream Mix"))
+        }
+        if voiceOff {
+            if case .failed = state { items.append(.separator()) }
+            items.append(disabledItem("Voice is silent while monitoring is Off"))
+        }
+        return items
+    }
+
+    /// An open app that can get its own Stream Mixer channel.
+    struct MixerAppChoice {
+        var bundleID: String
+        var name: String
+        var icon: NSImage?
+    }
+
+    /// The open apps that have no channel yet, by name, each listed once.
+    private func addableApps(excluding appChannels: [MixerEngine.Channel]) -> [MixerAppChoice] {
+        let candidates = NSWorkspace.shared.runningApplications.filter { app in
+            guard app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+                  let id = app.bundleIdentifier, !MixerEngine.isWebAppShim(bundleID: id) else { return false }
+            return id != Bundle.main.bundleIdentifier && !appChannels.contains { $0.source == .app(bundleID: id) }
+        }.sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
+        var seen: Set<String> = []
+        return candidates.compactMap { app in
+            guard let id = app.bundleIdentifier, seen.insert(id).inserted else { return nil }
+            return MixerAppChoice(bundleID: id, name: app.localizedName ?? id, icon: sizedMixerIcon(app.icon))
+        }
+    }
+
+    /// The "Add App" submenu: one item per app in `choices`, or a disabled
+    /// line saying why there is nothing to add.
+    static func addAppMenu(_ choices: [MixerAppChoice], atLimit: Bool, target: AnyObject?) -> NSMenu {
+        let apps = NSMenu()
+        apps.autoenablesItems = false
+        if atLimit {
+            apps.addItem(disabledItem("Up to 6 apps"))
+            return apps
+        }
+        if choices.isEmpty { apps.addItem(disabledItem("No other apps are open")) }
+        for app in choices {
+            let choice = NSMenuItem(title: app.name, action: #selector(AppDelegate.addMixerApp(_:)),
+                                    keyEquivalent: "")
+            choice.target = target
+            choice.representedObject = app.bundleID
+            choice.image = app.icon
+            apps.addItem(choice)
+        }
+        return apps
     }
 
     private func sizedMixerIcon(_ image: NSImage?) -> NSImage? {

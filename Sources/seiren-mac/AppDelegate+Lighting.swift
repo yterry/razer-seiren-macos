@@ -28,29 +28,34 @@ extension AppDelegate {
     /// picks something, the device's own lighting is left untouched.
     func lightingMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Lighting", action: nil, keyEquivalent: "")
+        item.submenu = Self.lightingMenu(lastError: lighting.lastError, deviceConnected: lighting.deviceConnected,
+                                         current: settings.lightingState, target: self)
+        return item
+    }
+
+    static func lightingMenu(lastError: LightingError?, deviceConnected: Bool, current: LightingState?,
+                             target: AnyObject?) -> NSMenu {
         let submenu = NSMenu()
         submenu.autoenablesItems = false
 
-        if lighting.lastError == .permissionDenied {
+        if lastError == .permissionDenied {
             submenu.addItem(disabledItem("Lighting needs Input Monitoring access"))
             let open = NSMenuItem(title: "Open Input Monitoring Settings…",
-                                  action: #selector(openInputMonitoringSettings),
+                                  action: #selector(AppDelegate.openInputMonitoringSettings),
                                   keyEquivalent: "")
-            open.target = self
+            open.target = target
             open.isEnabled = true
             submenu.addItem(open)
             submenu.addItem(.separator())
-        } else if !lighting.deviceConnected {
+        } else if !deviceConnected {
             submenu.addItem(disabledItem("Applies when the Seiren is connected"))
             submenu.addItem(.separator())
         }
 
-        let current = settings.lightingState
-
         func effectItem(_ title: String, _ effect: ChromaEffect) -> NSMenuItem {
-            let i = NSMenuItem(title: title, action: #selector(selectLightingEffect(_:)),
+            let i = NSMenuItem(title: title, action: #selector(AppDelegate.selectLightingEffect(_:)),
                                keyEquivalent: "")
-            i.target = self
+            i.target = target
             i.isEnabled = true
             i.state = (current?.effect == effect) ? .on : .off
             i.representedObject = Int(effect.rawValue)
@@ -67,9 +72,9 @@ extension AppDelegate {
         let colors = NSMenu()
         colors.autoenablesItems = false
         for (name, hex) in Self.lightingPalette {
-            let c = NSMenuItem(title: name, action: #selector(selectLightingColor(_:)),
+            let c = NSMenuItem(title: name, action: #selector(AppDelegate.selectLightingColor(_:)),
                                keyEquivalent: "")
-            c.target = self
+            c.target = target
             c.isEnabled = true
             c.state = (current?.effect == .static && current?.color?.hex == hex) ? .on : .off
             c.representedObject = hex
@@ -82,19 +87,21 @@ extension AppDelegate {
         submenu.addItem(effectItem("Off", .off))
 
         submenu.addItem(.separator())
-        submenu.addItem(lightingBrightnessItem())
+        submenu.addItem(lightingBrightnessItem(percent: current?.brightnessPercent ?? 100, target: target))
 
-        if lighting.lastError != nil, lighting.lastError != .permissionDenied {
+        if deviceConnected, lastError != nil, lastError != .permissionDenied {
             submenu.addItem(.separator())
-            submenu.addItem(disabledItem("Couldn't reach the mic's lighting — replug and retry"))
+            submenu.addItem(disabledItem("Couldn't reach the mic's lighting"))
+            let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryLighting), keyEquivalent: "")
+            retry.target = target
+            submenu.addItem(retry)
         }
 
-        item.submenu = submenu
-        return item
+        return submenu
     }
 
     /// A small filled-circle color swatch for the palette items.
-    private func swatch(hex: String) -> NSImage? {
+    private static func swatch(hex: String) -> NSImage? {
         guard let rgb = RGB(hex: hex) else { return nil }
         let size = NSSize(width: 14, height: 14)
         let image = NSImage(size: size, flipped: false) { rect in
@@ -106,10 +113,6 @@ extension AppDelegate {
             return true
         }
         return image
-    }
-
-    private func lightingBrightnessItem() -> NSMenuItem {
-        Self.lightingBrightnessItem(percent: settings.lightingState?.brightnessPercent ?? 100, target: self)
     }
 
     static func lightingBrightnessItem(percent: Int, target: AnyObject?) -> NSMenuItem {
@@ -155,6 +158,10 @@ extension AppDelegate {
         settings.lightingState = state
         lighting.apply(state)
         rebuildMenu()
+    }
+
+    @objc private func retryLighting() {
+        lighting.reassert()
     }
 
     @objc private func openInputMonitoringSettings() {

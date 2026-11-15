@@ -13,11 +13,12 @@ final class DiagnosticsReportTests: XCTestCase {
                           activeSource: MonitorEngine.InputDevice? = nil,
                           inputPreference: MonitorEngine.InputPreference = .automatic,
                           fxRouteFailure: Int32? = nil,
+                          engineState: MonitorEngine.State = .running,
                           mixerState: MixerEngine.State = .off) -> DiagnosticsSnapshot {
         DiagnosticsSnapshot(
             versions: .init(app: "1.2.0", macOS: "Version 15.1 (Build 24B83)", architecture: "arm64",
                             installedFX: "1.1.0", bundledFX: "1.2.0", reinstallOffered: false, updateOffered: true),
-            engine: .init(mode: .auto, state: .running, inputPreference: inputPreference,
+            engine: .init(mode: .auto, state: engineState, inputPreference: inputPreference,
                           activeSource: activeSource, routesThroughFX: fxRouteFailure == nil,
                           fxRouteFailure: fxRouteFailure, standbyRunning: false,
                           route: .init(callbacks: 1200, inputBuffers: 2, outputBuffers: 3, monitorBuffers: 1,
@@ -50,7 +51,21 @@ final class DiagnosticsReportTests: XCTestCase {
         XCTAssertTrue(healthy.contains("  Through Seiren FX: yes\n  Seiren FX route failure: none\n"))
 
         let degraded = DiagnosticsReport.render(snapshot(fxRouteFailure: -66681))
-        XCTAssertTrue(degraded.contains("  Through Seiren FX: no\n  Seiren FX route failure: -66681\n"))
+        XCTAssertTrue(degraded.contains("  Through Seiren FX: no\n  Seiren FX route failure: Core Audio error -66681\n"))
+
+        let named = DiagnosticsReport.render(snapshot(fxRouteFailure: kAudioHardwareBadDeviceError))
+        XCTAssertTrue(named.contains("  Seiren FX route failure: Core Audio error '!dev' (560227702)\n"))
+    }
+
+    func testStateLinesShowAFailureCodeAsFourCharactersAndANumber() {
+        let healthy = DiagnosticsReport.render(snapshot())
+        XCTAssertTrue(healthy.contains("Engine\n  Mode: auto\n  State: running\n"))
+        XCTAssertTrue(healthy.contains("  Availability: idle\n  State: off\n"))
+
+        let failed = DiagnosticsReport.render(snapshot(engineState: .failed(kAudioHardwareIllegalOperationError),
+                                                       mixerState: .failed(-50)))
+        XCTAssertTrue(failed.contains("Engine\n  Mode: auto\n  State: failed, Core Audio error 'nope' (1852797029)\n"))
+        XCTAssertTrue(failed.contains("  Availability: idle\n  State: failed, Core Audio error -50\n"))
     }
 
     func testOtherDevicesAreListedByTransportInsteadOfName() {

@@ -97,7 +97,7 @@ extension AppDelegate {
     static func driverNotLoadedAlert() -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Seiren FX was copied but macOS did not load it"
-        alert.informativeText = "The driver is at \(DriverInstaller.installedPath). " +
+        alert.informativeText = "The driver is at:\n\(DriverInstaller.installedPath)\n\n" +
             "Restart the Mac to load it."
         alert.alertStyle = .warning
         return alert
@@ -108,7 +108,7 @@ extension AppDelegate {
     /// save the paused mode as the one to restore.
     @objc private func changeDriver(_ sender: NSMenuItem) {
         guard !driverChangeInProgress, let action = sender.representedObject as? DriverAction,
-              Self.driverConfirmationAlert(action).runModal() == .alertFirstButtonReturn else { return }
+              Self.runAlert(Self.driverConfirmationAlert(action)) == .alertFirstButtonReturn else { return }
         if action == .uninstall { uninstallDriver() } else { installDriver(action) }
     }
 
@@ -131,7 +131,7 @@ extension AppDelegate {
                     engine.fxAvailable && !engine.fxNeedsReinstall
                 }
                 resume()
-                (loaded ? Self.driverInstalledAlert(action) : Self.driverNotLoadedAlert()).runModal()
+                Self.runAlert(loaded ? Self.driverInstalledAlert(action) : Self.driverNotLoadedAlert())
             }
         }
     }

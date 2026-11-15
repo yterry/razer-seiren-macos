@@ -72,6 +72,26 @@ final class DriverInstallerTests: XCTestCase {
         }
     }
 
+    func testTheNotLoadedDialogPutsTheDriverPathOnItsOwnLine() {
+        let alert = AppDelegate.driverNotLoadedAlert()
+        XCTAssertEqual(alert.messageText, "Seiren FX was copied but macOS did not load it")
+        XCTAssertEqual(alert.informativeText.components(separatedBy: "\n"),
+                       ["The driver is at:", "/Library/Audio/Plug-Ins/HAL/SeirenFX.driver", "",
+                        "Restart the Mac to load it."])
+    }
+
+    func testAnAlertRunsOnlyAfterTheAppIsActivated() {
+        let alert = AppDelegate.driverNotLoadedAlert()
+        var steps: [String] = []
+        let response = AppDelegate.runAlert(alert, activate: { steps.append("activate") }, run: { ran in
+            XCTAssertTrue(ran === alert)
+            steps.append("run")
+            return .alertSecondButtonReturn
+        })
+        XCTAssertEqual(steps, ["activate", "run"])
+        XCTAssertEqual(response, .alertSecondButtonReturn)
+    }
+
     func testOnlyAFirstInstallRepeatsTheSetupAdvice() {
         XCTAssertTrue(AppDelegate.driverInstalledAlert(.install).informativeText.contains("Equalizer"))
         for action in [AppDelegate.DriverAction.update, .reinstall] {
