@@ -3,14 +3,14 @@ import SeirenKit
 
 extension AppDelegate {
     func inputMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Input", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: Strings.inputTitle, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.autoenablesItems = false
-        let automatic = NSMenuItem(title: "Automatic", action: #selector(selectInput(_:)), keyEquivalent: "")
+        let automatic = NSMenuItem(title: Strings.inputAutomatic, action: #selector(selectInput(_:)), keyEquivalent: "")
         automatic.target = self
         automatic.state = engine.inputPreference == .automatic ? .on : .off
         submenu.addItem(automatic)
-        submenu.addItem(disabledItem("Seiren first, then your default mic"))
+        submenu.addItem(disabledItem(Strings.inputAutomaticHint))
         submenu.addItem(.separator())
         let fxAvailable = engine.fxAvailable
         for input in engine.availableInputs {
@@ -24,14 +24,14 @@ extension AppDelegate {
         if case .device(let uid) = engine.inputPreference,
            !engine.availableInputs.contains(where: { $0.uid == uid }) {
             let name = settings.inputSourceName ?? uid
-            let missing = disabledItem("\(name) (not connected)")
+            let missing = disabledItem(Strings.inputNotConnected(name))
             missing.state = .on
             submenu.addItem(missing)
         }
         if !engine.otherInputsSupported {
-            submenu.addItem(disabledItem("Other mics need macOS 14 or later"))
+            submenu.addItem(disabledItem(Strings.inputNeedsMacOS14))
         } else if !fxAvailable {
-            submenu.addItem(disabledItem("Other mics need Seiren FX (see Voice)"))
+            submenu.addItem(disabledItem(Strings.inputNeedsFX))
         }
         item.submenu = submenu
         return item
@@ -41,7 +41,7 @@ extension AppDelegate {
     /// about where the EQ is heard. When the SeirenFX driver isn't installed, the
     /// EQ can't reach anything, so we say so instead of offering dead controls.
     func voiceMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Voice", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: Strings.voiceTitle, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         // We manage enabled-state ourselves (presets gray out when the EQ is
         // off); without this AppKit auto-enables any item with a valid action
@@ -51,21 +51,21 @@ extension AppDelegate {
         let fxAvailable = engine.fxAvailable
         // A bundled update or reinstall is offered at the top level of the menu.
         if engine.fxNeedsReinstall && !DriverInstaller.isBundled {
-            submenu.addItem(disabledItem("Seiren FX needs a one-time reinstall"))
-            submenu.addItem(disabledItem("Run scripts/build-driver.sh"))
-            submenu.addItem(disabledItem("then sudo scripts/install-driver.sh"))
+            submenu.addItem(disabledItem(Strings.driverNeedsReinstall))
+            submenu.addItem(disabledItem(Strings.voiceRunBuildDriver))
+            submenu.addItem(disabledItem(Strings.voiceThenInstallDriver))
         }
 
         if !fxAvailable {
             if DriverInstaller.isBundled {
                 submenu.addItem(driverMenuItem(offeredDriverAction ?? .install))
-                submenu.addItem(disabledItem("Enables EQ in OBS / Zoom / Discord"))
+                submenu.addItem(disabledItem(Strings.voiceEnablesEQ))
             } else {
-                submenu.addItem(disabledItem("Build the Seiren FX driver to use EQ"))
-                submenu.addItem(disabledItem("(see the README — scripts/build-driver.sh)"))
+                submenu.addItem(disabledItem(Strings.voiceBuildDriver))
+                submenu.addItem(disabledItem(Strings.voiceSeeReadme))
             }
         } else {
-            let toggle = NSMenuItem(title: "Equalizer",
+            let toggle = NSMenuItem(title: Strings.voiceEqualizer,
                                     action: #selector(toggleEQ), keyEquivalent: "")
             toggle.target = self
             toggle.isEnabled = true
@@ -75,10 +75,10 @@ extension AppDelegate {
             submenu.addItem(.separator())
             // Presets are only meaningful with the EQ on, so gray them out when
             // it's off — making it obvious you flip "Equalizer" first.
-            let presetsHeader = disabledItem(engine.eqEnabled ? "Preset" : "Preset (turn on Equalizer)")
+            let presetsHeader = disabledItem(engine.eqEnabled ? Strings.voicePreset : Strings.voicePresetTurnOnEQ)
             submenu.addItem(presetsHeader)
             for preset in EQPreset.builtIns {
-                let p = NSMenuItem(title: preset.name,
+                let p = NSMenuItem(title: Strings.eqPresetName(preset),
                                    action: #selector(selectEQPreset(_:)), keyEquivalent: "")
                 p.target = self
                 p.state = (engine.eqPreset.name == preset.name) ? .on : .off
@@ -87,18 +87,18 @@ extension AppDelegate {
                 submenu.addItem(p)
             }
             submenu.addItem(.separator())
-            submenu.addItem(disabledItem("Noise suppression"))
-            submenu.addItem(nsItem("Off", .off))
-            submenu.addItem(nsItem("Reduce noise (gate)", .gate))
-            let studio = nsItem("Studio Denoise (RNNoise)", .studio)
+            submenu.addItem(disabledItem(Strings.voiceNoiseSuppression))
+            submenu.addItem(nsItem(Strings.voiceNoiseSuppressionOff, .off))
+            submenu.addItem(nsItem(Strings.voiceNoiseSuppressionGate, .gate))
+            let studio = nsItem(Strings.voiceNoiseSuppressionStudio, .studio)
             studio.isEnabled = engine.studioAvailable
             submenu.addItem(studio)
             if engine.noiseSuppression == .studio {
                 // The "monitor stays low-latency" reassurance only means
                 // something when there is a monitor.
                 submenu.addItem(disabledItem(engine.deviceHasHeadphoneOutput
-                    ? "Studio: removes steady noise · your monitor stays low-latency"
-                    : "Studio: removes steady noise · adds ~10 ms to Seiren FX"))
+                    ? Strings.voiceStudioWithMonitor
+                    : Strings.voiceStudioWithoutMonitor))
             }
 
             submenu.addItem(.separator())
@@ -127,13 +127,13 @@ extension AppDelegate {
     private func eqReachCaption() -> String {
         if engine.isRoutingThroughFX {
             return engine.deviceHasHeadphoneOutput
-                ? "Heard in your monitor + apps recording “Seiren FX”"
-                : "Heard by apps recording “Seiren FX”"
+                ? Strings.voiceCaptionHeardInMonitor
+                : Strings.voiceCaptionHeardByApps
         }
-        if engine.fxRouteFailure != nil { return "Seiren FX couldn't start - the EQ isn't applied" }
+        if engine.fxRouteFailure != nil { return Strings.voiceCaptionFXFailed }
         return engine.mode == .off
-            ? "Turn monitoring on to apply the EQ"
-            : "Applies once monitoring is active"
+            ? Strings.voiceCaptionTurnOnMonitoring
+            : Strings.voiceCaptionAppliesWhenActive
     }
 
     func volumeItem(enabled: Bool) -> NSMenuItem {
@@ -148,7 +148,7 @@ extension AppDelegate {
                                    target: target, action: #selector(levelChanged(_:)))
         slider.isContinuous = true
         slider.isEnabled = enabled
-        return (sliderItem(caption: "Volume", label: "Headphone monitor volume", slider: slider), slider)
+        return (sliderItem(caption: Strings.volumeCaption, label: Strings.volumeLabel, slider: slider), slider)
     }
 
     @objc private func selectInput(_ sender: NSMenuItem) {

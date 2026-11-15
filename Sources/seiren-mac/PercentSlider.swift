@@ -12,8 +12,8 @@ final class PercentSlider: NSSlider {
 
 final class PercentSliderCell: NSSliderCell {
     override func accessibilityValueDescription() -> String? {
-        guard maxValue > minValue else { return "0%" }
+        guard maxValue > minValue else { return Strings.percent(0) }
         let fraction = (doubleValue - minValue) / (maxValue - minValue)
-        return "\(Int((fraction * 100).rounded()))%"
+        return Strings.percent(Int((fraction * 100).rounded()))
     }
 }

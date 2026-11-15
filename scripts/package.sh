@@ -54,6 +54,9 @@ cp "${PLIST_SRC}" "${CONTENTS}/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${CONTENTS}/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${CONTENTS}/Info.plist"
 
+# Localized strings: the menu's text and the permission prompts.
+cp -R Resources/*.lproj "${CONTENTS}/Resources/"
+
 # Icon (optional): build AppIcon.icns from Resources/AppIcon.png if present.
 if [[ -f Resources/AppIcon.png ]]; then
   echo "==> building AppIcon.icns"

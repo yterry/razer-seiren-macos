@@ -8,14 +8,10 @@ extension AppDelegate {
     /// The one dialog a new install shows. Escape answers "Not now".
     static func welcomeAlert() -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "Seiren runs in the menu bar"
-        alert.informativeText = "Seiren has no window and no Dock icon. Click the microphone " +
-            "icon in the menu bar to change its settings.\n\n" +
-            "Auto is the recommended mode. It runs headphone monitoring and voice processing " +
-            "only while another app is using the microphone, such as during a call. " +
-            "macOS asks for microphone access the first time a mode is turned on."
-        alert.addButton(withTitle: "Turn on Auto")
-        alert.addButton(withTitle: "Not now").keyEquivalent = "\u{1b}"
+        alert.messageText = Strings.welcomeTitle
+        alert.informativeText = Strings.welcomeMessage
+        alert.addButton(withTitle: Strings.welcomeTurnOnAuto)
+        alert.addButton(withTitle: Strings.welcomeNotNow).keyEquivalent = "\u{1b}"
         return alert
     }
 

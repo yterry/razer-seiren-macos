@@ -1,0 +1,437 @@
+/* English text for every string in Sources/seiren-mac/Strings.swift.
+   LocalizableStringsTests checks that this file and the table match. */
+
+/* Menu item that retries a failed action */
+"common.tryAgain" = "Try Again";
+
+/* Dialog button */
+"common.cancel" = "Cancel";
+
+/* A level as a percentage, e.g. 42% */
+"common.percent" = "%ld%%";
+
+/* Menu line after a crash */
+"crash.notice" = "Seiren quit unexpectedly last time";
+
+/* Menu item */
+"crash.copy" = "Copy Crash Report";
+
+/* Menu item that opens a new bug report */
+"crash.report" = "Report on GitHub…";
+
+/* Menu item that hides the crash notice */
+"crash.dismiss" = "Dismiss";
+
+/* Error dialog; %@ is the system's error text */
+"crash.readFailed" = "Couldn't read the crash report: %@";
+
+/* Device name in the status line when no microphone is known */
+"status.defaultDevice" = "Seiren";
+
+/* Status line; %@ is a microphone name */
+"status.noSeiren.using" = "No Seiren · Seiren FX is using %@";
+
+/* Status line; %@ is a microphone name */
+"status.processing" = "Processing: %@ → Seiren FX";
+
+/* Status line; %@ is a microphone name */
+"status.noSeiren.willUse" = "No Seiren · Seiren FX will use %@";
+
+/* Status line; %@ is a microphone name */
+"status.standby" = "Standby: %@ → Seiren FX";
+
+/* Status line; %@ is a microphone name */
+"status.monitoring" = "Monitoring: %@";
+
+/* Status line */
+"status.autoWaiting" = "Auto: waiting for an app to use the mic";
+
+/* Status line */
+"status.noMicrophone" = "No microphone detected";
+
+/* Status line */
+"status.noSeiren" = "No Seiren detected";
+
+/* Status line; %@ is a microphone name */
+"status.needsFX" = "%@ needs Seiren FX";
+
+/* Status line */
+"status.permissionDenied" = "Microphone access denied";
+
+/* Status line */
+"status.failed" = "Couldn't start audio";
+
+/* Status line; %@ is a microphone name */
+"status.ready" = "Ready: %@";
+
+/* Status line */
+"status.off" = "Monitoring off";
+
+/* Menu line */
+"menu.fxRouteFailed" = "Seiren FX couldn't start - apps using it hear silence";
+
+/* Menu line */
+"menu.waitingForFXRecording" = "Starts when an app records from Seiren FX";
+
+/* Menu line */
+"menu.microphoneAccessRequired" = "Microphone access is required";
+
+/* Menu item */
+"menu.openMicrophoneSettings" = "Open Microphone Settings…";
+
+/* Monitoring mode */
+"menu.mode.off" = "Off";
+
+/* Monitoring mode */
+"menu.mode.always" = "On — always";
+
+/* Monitoring mode */
+"menu.mode.auto" = "Auto — only while an app uses the mic";
+
+/* Menu line; %@ is the app version */
+"menu.version.fxNotInstalled" = "Seiren %@ · Seiren FX not installed";
+
+/* Menu line; %1$@ is the app version, %2$@ the driver version */
+"menu.version" = "Seiren %1$@ · Seiren FX %2$@";
+
+/* Menu item; %@ is a version number */
+"menu.newRelease" = "Version %@ is available";
+
+/* Menu item */
+"menu.copyDiagnostics" = "Copy Diagnostics";
+
+/* Menu item */
+"menu.quit" = "Quit Seiren";
+
+/* Title of an error dialog */
+"alert.error.title" = "Seiren";
+
+/* Caption above the volume slider */
+"volume.caption" = "Volume";
+
+/* Accessibility label and tooltip of the volume slider */
+"volume.label" = "Headphone monitor volume";
+
+/* Submenu title */
+"input.title" = "Input";
+
+/* Input choice */
+"input.automatic" = "Automatic";
+
+/* Menu line under Automatic */
+"input.automaticHint" = "Seiren first, then your default mic";
+
+/* Input choice; %@ is a microphone name */
+"input.notConnected" = "%@ (not connected)";
+
+/* Menu line */
+"input.needsMacOS14" = "Other mics need macOS 14 or later";
+
+/* Menu line */
+"input.needsFX" = "Other mics need Seiren FX (see Voice)";
+
+/* Submenu title */
+"voice.title" = "Voice";
+
+/* Menu line */
+"voice.runBuildDriver" = "Run scripts/build-driver.sh";
+
+/* Menu line */
+"voice.thenInstallDriver" = "then sudo scripts/install-driver.sh";
+
+/* Menu line under the install item */
+"voice.enablesEQ" = "Enables EQ in OBS / Zoom / Discord";
+
+/* Menu line */
+"voice.buildDriver" = "Build the Seiren FX driver to use EQ";
+
+/* Menu line */
+"voice.seeReadme" = "(see the README — scripts/build-driver.sh)";
+
+/* Menu item that turns the EQ on or off */
+"voice.equalizer" = "Equalizer";
+
+/* Header above the EQ presets */
+"voice.preset" = "Preset";
+
+/* Header above the EQ presets while the EQ is off */
+"voice.presetTurnOnEQ" = "Preset (turn on Equalizer)";
+
+/* EQ preset */
+"voice.preset.flat" = "Flat";
+
+/* EQ preset */
+"voice.preset.podcast" = "Podcast";
+
+/* EQ preset */
+"voice.preset.studio" = "Studio";
+
+/* EQ preset */
+"voice.preset.broadcast" = "Broadcast";
+
+/* Header above the noise suppression choices */
+"voice.noiseSuppression" = "Noise suppression";
+
+/* Noise suppression choice */
+"voice.noiseSuppression.off" = "Off";
+
+/* Noise suppression choice */
+"voice.noiseSuppression.gate" = "Reduce noise (gate)";
+
+/* Noise suppression choice */
+"voice.noiseSuppression.studio" = "Studio Denoise (RNNoise)";
+
+/* Menu line */
+"voice.studio.withMonitor" = "Studio: removes steady noise · your monitor stays low-latency";
+
+/* Menu line */
+"voice.studio.withoutMonitor" = "Studio: removes steady noise · adds ~10 ms to Seiren FX";
+
+/* Where the EQ is heard */
+"voice.caption.heardInMonitor" = "Heard in your monitor + apps recording “Seiren FX”";
+
+/* Where the EQ is heard */
+"voice.caption.heardByApps" = "Heard by apps recording “Seiren FX”";
+
+/* Where the EQ is heard */
+"voice.caption.fxFailed" = "Seiren FX couldn't start - the EQ isn't applied";
+
+/* Where the EQ is heard */
+"voice.caption.turnOnMonitoring" = "Turn monitoring on to apply the EQ";
+
+/* Where the EQ is heard */
+"voice.caption.appliesWhenActive" = "Applies once monitoring is active";
+
+/* Submenu title */
+"mixer.title" = "Stream Mixer";
+
+/* Menu line under the update item */
+"mixer.addsStreamMix" = "Adds the Seiren Stream Mix device";
+
+/* Menu line under the install item */
+"mixer.addsFXAndStreamMix" = "Adds Seiren FX and Seiren Stream Mix";
+
+/* Menu line */
+"mixer.rebuildDriver" = "Rebuild the driver: scripts/build-driver.sh";
+
+/* Menu line */
+"mixer.thenInstallDriver" = "then: sudo scripts/install-driver.sh";
+
+/* Menu line */
+"mixer.needsMacOS" = "Needs macOS 14.2 or later";
+
+/* Menu item that turns the mixer on or off */
+"mixer.toggle" = "Mix into Seiren Stream Mix";
+
+/* Menu line */
+"mixer.obsHint" = "In OBS, pick “Seiren Stream Mix” as the mic";
+
+/* Tooltip of the Desktop audio channel */
+"mixer.desktopTooltip" = "Every app without its own channel";
+
+/* Submenu title */
+"mixer.addApp" = "Add App";
+
+/* Submenu title */
+"mixer.removeApp" = "Remove App";
+
+/* Menu line when no more apps can be added */
+"mixer.appLimit" = "Up to 6 apps";
+
+/* Menu line */
+"mixer.noOtherApps" = "No other apps are open";
+
+/* Mixer state */
+"mixer.state.live" = "Live · mixing into Seiren Stream Mix";
+
+/* Mixer state */
+"mixer.state.failed" = "Couldn't start the Stream Mixer";
+
+/* Mixer state */
+"mixer.state.waiting" = "Starts when an app records Seiren Stream Mix";
+
+/* Menu line */
+"mixer.voiceSilent" = "Voice is silent while monitoring is Off";
+
+/* Stream Mixer channel */
+"mixer.channel.voice" = "Voice";
+
+/* Stream Mixer channel */
+"mixer.channel.desktop" = "Desktop audio";
+
+/* Value of a muted channel */
+"mixer.row.muted" = "Muted";
+
+/* Accessibility value of a channel's mute button */
+"mixer.row.unmuted" = "Unmuted";
+
+/* Tooltip of a channel's mute button */
+"mixer.row.mute" = "Mute on stream";
+
+/* Tooltip of a channel's mute button */
+"mixer.row.unmute" = "Unmute on stream";
+
+/* Accessibility label of a channel's slider; %@ is the channel name */
+"mixer.row.levelLabel" = "%@ level on stream";
+
+/* Accessibility label of a channel's mute button; %1$@ is the channel name, %2$@ its tooltip */
+"mixer.row.muteLabel" = "%1$@: %2$@";
+
+/* Submenu title */
+"lighting.title" = "Lighting";
+
+/* Menu line */
+"lighting.needsInputMonitoring" = "Lighting needs Input Monitoring access";
+
+/* Menu item */
+"lighting.openInputMonitoringSettings" = "Open Input Monitoring Settings…";
+
+/* Menu line */
+"lighting.appliesWhenConnected" = "Applies when the Seiren is connected";
+
+/* Lighting effect */
+"lighting.effect.spectrum" = "Spectrum (device default)";
+
+/* Lighting effect */
+"lighting.effect.breathing" = "Breathing";
+
+/* Lighting effect */
+"lighting.effect.wave" = "Wave";
+
+/* Lighting effect with one color */
+"lighting.effect.static" = "Static";
+
+/* Lighting effect */
+"lighting.effect.off" = "Off";
+
+/* Lighting color */
+"lighting.color.razerGreen" = "Razer Green";
+
+/* Lighting color */
+"lighting.color.white" = "White";
+
+/* Lighting color */
+"lighting.color.red" = "Red";
+
+/* Lighting color */
+"lighting.color.orange" = "Orange";
+
+/* Lighting color */
+"lighting.color.yellow" = "Yellow";
+
+/* Lighting color */
+"lighting.color.cyan" = "Cyan";
+
+/* Lighting color */
+"lighting.color.blue" = "Blue";
+
+/* Lighting color */
+"lighting.color.purple" = "Purple";
+
+/* Lighting color */
+"lighting.color.pink" = "Pink";
+
+/* Menu line */
+"lighting.unreachable" = "Couldn't reach the mic's lighting";
+
+/* Caption above the brightness slider */
+"lighting.brightness.caption" = "Brightness";
+
+/* Accessibility label and tooltip of the brightness slider */
+"lighting.brightness.label" = "Lighting brightness";
+
+/* Menu item */
+"login.title" = "Launch at Login";
+
+/* Menu item in a build without an app bundle */
+"login.packagedOnly" = "Launch at Login (packaged app only)";
+
+/* Menu item */
+"login.needsApproval" = "Launch at Login (needs approval)";
+
+/* Error dialog; %@ is the system's error text */
+"login.turnOnFailed" = "Couldn't turn on Launch at Login: %@";
+
+/* Error dialog; %@ is the system's error text */
+"login.turnOffFailed" = "Couldn't turn off Launch at Login: %@";
+
+/* First launch dialog */
+"welcome.title" = "Seiren runs in the menu bar";
+
+/* First launch dialog */
+"welcome.message" = "Seiren has no window and no Dock icon. Click the microphone icon in the menu bar to change its settings.\n\nAuto is the recommended mode. It runs headphone monitoring and voice processing only while another app is using the microphone, such as during a call. macOS asks for microphone access the first time a mode is turned on.";
+
+/* First launch dialog button */
+"welcome.turnOnAuto" = "Turn on Auto";
+
+/* First launch dialog button */
+"welcome.notNow" = "Not now";
+
+/* Menu line */
+"driver.noHeadphoneJack" = "This mic has no headphone jack - it works through Seiren FX";
+
+/* Menu line */
+"driver.installFirst" = "Install Seiren FX first (scripts/install-driver.sh)";
+
+/* Menu line */
+"driver.needsReinstall" = "Seiren FX needs a one-time reinstall";
+
+/* Menu line */
+"driver.updateAvailable" = "A newer Seiren FX comes with this app";
+
+/* Driver action, used in the menu item, dialog title and button */
+"driver.verb.install" = "Install";
+
+/* Driver action, used in the menu item, dialog title and button */
+"driver.verb.update" = "Update";
+
+/* Driver action, used in the menu item, dialog title and button */
+"driver.verb.reinstall" = "Reinstall";
+
+/* Driver action, used in the menu item, dialog title and button */
+"driver.verb.uninstall" = "Uninstall";
+
+/* Menu item; %@ is a driver action such as Install */
+"driver.menuItem" = "%@ Seiren FX…";
+
+/* Dialog title; %@ is a driver action such as Install */
+"driver.confirm.title" = "%@ Seiren FX?";
+
+/* Dialog text before an install, update or reinstall */
+"driver.confirm.installing" = "Installing Seiren FX restarts audio on this Mac for about a second. Calls and recordings in other apps will be interrupted.";
+
+/* Dialog text before an uninstall */
+"driver.confirm.uninstalling" = "Uninstalling Seiren FX restarts audio on this Mac for about a second. Calls and recordings in other apps will be interrupted.";
+
+/* Dialog title */
+"driver.installed.title" = "Seiren FX installed";
+
+/* Dialog text after a first install */
+"driver.installed.message" = "Audio was restarted. Turn on the Equalizer under Voice, then choose “Seiren FX” as the microphone in OBS / Zoom / Discord to send them your processed voice.";
+
+/* Dialog title */
+"driver.updated.title" = "Seiren FX updated";
+
+/* Dialog title */
+"driver.reinstalled.title" = "Seiren FX reinstalled";
+
+/* Dialog text after an update or reinstall */
+"driver.replaced.message" = "Audio was restarted. Your Voice settings and the apps that use Seiren FX keep working as before.";
+
+/* Dialog title */
+"driver.notLoaded.title" = "Seiren FX was copied but macOS did not load it";
+
+/* Dialog text; %@ is the driver's path */
+"driver.notLoaded.message" = "The driver is at:\n%@\n\nRestart the Mac to load it.";
+
+/* Error dialog; %@ is why the install failed */
+"driver.installFailed" = "Couldn't install Seiren FX:\n%@\n\nYou can also install it manually with scripts/install-driver.sh.";
+
+/* Error dialog; %@ is why the uninstall failed */
+"driver.uninstallFailed" = "Couldn't uninstall Seiren FX:\n%@";
+
+/* Why an install failed */
+"driver.notBundled" = "The bundled SeirenFX.driver wasn't found in the app.";
+
+/* Why an install failed; %d is the exit status */
+"driver.exitStatus" = "Installation failed (exit %d).";

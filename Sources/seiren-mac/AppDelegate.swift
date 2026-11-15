@@ -241,10 +241,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
         // 0. The app crashed last time: offer the report macOS wrote.
         if crashReport != nil {
-            menu.addItem(disabledItem("Seiren quit unexpectedly last time"))
-            for (title, action) in [("Copy Crash Report", #selector(copyCrashReport)),
-                                    ("Report on GitHub…", #selector(reportCrashOnGitHub)),
-                                    ("Dismiss", #selector(dismissCrashReport))] {
+            menu.addItem(disabledItem(Strings.crashNotice))
+            for (title, action) in [(Strings.crashCopy, #selector(copyCrashReport)),
+                                    (Strings.crashReport, #selector(reportCrashOnGitHub)),
+                                    (Strings.crashDismiss, #selector(dismissCrashReport))] {
                 let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
                 item.target = self
                 menu.addItem(item)
@@ -255,16 +255,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
         if engine.fxRouteFailure != nil {
-            menu.addItem(disabledItem("Seiren FX couldn't start - apps using it hear silence"))
+            menu.addItem(disabledItem(Strings.fxRouteFailed))
         }
         if engine.state == .waiting, engine.activeSource?.isSeiren == false {
-            menu.addItem(disabledItem("Starts when an app records from Seiren FX"))
+            menu.addItem(disabledItem(Strings.waitingForFXRecording))
         }
 
         // 2. Helpers for the states only the user can fix.
         if engine.state == .permissionDenied {
-            menu.addItem(disabledItem("Microphone access is required"))
-            let open = NSMenuItem(title: "Open Microphone Settings…",
+            menu.addItem(disabledItem(Strings.microphoneAccessRequired))
+            let open = NSMenuItem(title: Strings.openMicrophoneSettings,
                                   action: #selector(openMicrophoneSettings),
                                   keyEquivalent: "")
             open.target = self
@@ -275,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         if case .failed(let code) = engine.state { failureCode = code } else { failureCode = engine.fxRouteFailure }
         if let code = failureCode {
             menu.addItem(disabledItem(CoreAudioCode.errorDescription(code)))
-            let retry = NSMenuItem(title: "Try Again", action: #selector(retryAudio), keyEquivalent: "")
+            let retry = NSMenuItem(title: Strings.tryAgain, action: #selector(retryAudio), keyEquivalent: "")
             retry.target = self
             menu.addItem(retry)
         }
@@ -283,9 +283,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         menu.addItem(.separator())
 
         // 3. Mode — three mutually-exclusive choices (radio-style checkmarks).
-        menu.addItem(modeItem("Off", .off))
-        menu.addItem(modeItem("On — always", .always))
-        let auto = modeItem("Auto — only while an app uses the mic", .auto)
+        menu.addItem(modeItem(Strings.modeOff, .off))
+        menu.addItem(modeItem(Strings.modeAlways, .always))
+        let auto = modeItem(Strings.modeAuto, .auto)
         menu.addItem(auto)
 
         menu.addItem(.separator())
@@ -323,19 +323,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         menu.addItem(.separator())
 
         // 7. Versions, and a bug report that needs no Swift toolchain.
-        menu.addItem(disabledItem(DiagnosticsReport.versionLine(app: Self.appVersion,
-                                                               installedFX: Self.installedFXVersion)))
+        menu.addItem(disabledItem(Strings.versionLine(app: Self.appVersion, installedFX: Self.installedFXVersion)))
         if let release = updateChecker.available {
             menu.addItem(Self.newReleaseItem(release, target: self))
         }
-        let copy = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
+        let copy = NSMenuItem(title: Strings.copyDiagnostics, action: #selector(copyDiagnostics), keyEquivalent: "")
         copy.target = self
         menu.addItem(copy)
 
         menu.addItem(.separator())
 
         // 8. Quit.
-        let quit = NSMenuItem(title: "Quit Seiren",
+        let quit = NSMenuItem(title: Strings.quit,
                               action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -351,17 +350,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     /// Human-readable device + state line for the top of the menu / tooltip.
     private func statusLine() -> String {
-        let device = engine.activeSource?.name ?? "Seiren"
+        let device = engine.activeSource?.name ?? Strings.defaultDeviceName
         if engine.activeSource?.isSeiren == false {
             switch engine.state {
             case .running:
                 return engine.inputPreference == .automatic
-                    ? "No Seiren · Seiren FX is using \(device)"
-                    : "Processing: \(device) → Seiren FX"
+                    ? Strings.statusNoSeirenUsing(device)
+                    : Strings.statusProcessing(device)
             case .waiting:
                 return engine.inputPreference == .automatic
-                    ? "No Seiren · Seiren FX will use \(device)"
-                    : "Standby: \(device) → Seiren FX"
+                    ? Strings.statusNoSeirenWillUse(device)
+                    : Strings.statusStandby(device)
             default: break
             }
         }
@@ -370,20 +369,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             // A jack-less mic isn't being monitored - its voice is being
             // processed into Seiren FX for other apps. Say that instead.
             return engine.deviceHasHeadphoneOutput
-                ? "Monitoring: \(device)"
-                : "Processing: \(device) → Seiren FX"
+                ? Strings.statusMonitoring(device)
+                : Strings.statusProcessing(device)
         case .waiting:
-            return "Auto: waiting for an app to use the mic"
+            return Strings.statusAutoWaiting
         case .noDevice:
-            return engine.fxAvailable && engine.otherInputsSupported ? "No microphone detected" : "No Seiren detected"
+            return engine.fxAvailable && engine.otherInputsSupported ? Strings.statusNoMicrophone : Strings.statusNoSeiren
         case .needsFX:
-            return "\(device) needs Seiren FX"
+            return Strings.statusNeedsFX(device)
         case .permissionDenied:
-            return "Microphone access denied"
+            return Strings.statusPermissionDenied
         case .failed:
-            return "Couldn't start audio"
+            return Strings.statusFailed
         case .stopped:
-            return engine.activeSource.map { "Ready: \($0.name)" } ?? "Monitoring off"
+            return engine.activeSource.map { Strings.statusReady($0.name) } ?? Strings.statusOff
         }
     }
 
@@ -486,7 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     func presentError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Seiren"
+        alert.messageText = Strings.errorTitle
         alert.informativeText = message
         alert.alertStyle = .warning
         Self.runAlert(alert)

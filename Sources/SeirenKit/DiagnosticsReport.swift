@@ -131,11 +131,6 @@ public struct DiagnosticsSnapshot {
 public enum DiagnosticsReport {
     public static let historyLimit = 100
 
-    /// The menu's version line.
-    public static func versionLine(app: String, installedFX: String?) -> String {
-        "Seiren \(app) · " + (installedFX.map { "Seiren FX \($0)" } ?? "Seiren FX not installed")
-    }
-
     public static func render(_ snapshot: DiagnosticsSnapshot) -> String {
         let labels = deviceLabels(snapshot.devices)
         func label(uid: String) -> String? {
