@@ -864,6 +864,75 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    func testModeOffPartwayThroughAFreezeStopsTheStallCheckAndStartsNothing() throws {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertNotNil(hardware.aggregates.first)
+
+        // One unchanged check has passed when the user turns monitoring off.
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 3)
+        XCTAssertEqual(engine.state, .running)
+        engine.setMode(.off)
+        XCTAssertEqual(engine.state, .stopped)
+        // Deliver the device-list event that destroying the aggregate queued.
+        clock.advance(by: 0)
+        XCTAssertEqual(clock.pendingTimerCount, 0, "the stall check must stop with the route")
+
+        // Run well past the 6 s stall and the 5 s retry.
+        let mark = hardware.calls.count
+        clock.advance(by: 30)
+        XCTAssertEqual(engine.state, .stopped)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.routeStalls, 0)
+        XCTAssertEqual(stallLogEntries(since: marker), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testAutoRouteStoppedWhenTheRecorderLeavesPartwayThroughAFreezeIsNotRestarted() throws {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.auto)
+        XCTAssertEqual(engine.state, .waiting)
+        let waitingTimers = clock.pendingTimerCount
+
+        hardware.recorders = [recorder(on: fx.id)]
+        hardware.fireRunningStateChanged(on: fx.id)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertNotNil(hardware.aggregates.first)
+
+        // One unchanged check has passed when the call app stops recording;
+        // the route stops after the 1 s grace period, before a stall is due.
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 3)
+        XCTAssertEqual(engine.state, .running)
+        hardware.recorders = []
+        hardware.fireRunningStateChanged(on: fx.id)
+        clock.advance(by: 1.5)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+        XCTAssertFalse(hardware.ioProcs.contains { $0.kind == .route })
+        XCTAssertEqual(clock.pendingTimerCount, waitingTimers, "the stall check must stop with the route")
+
+        // Run well past the 6 s stall and the 5 s retry.
+        let mark = hardware.calls.count
+        clock.advance(by: 30)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark).filter { $0.involvesRoute }, [])
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+        XCTAssertEqual(engine.routeStalls, 0)
+        XCTAssertEqual(stallLogEntries(since: marker), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     // MARK: Edge cases
 
     func testDeviceEventsFromTheFailedStartsOwnAggregateDoNotBypassTheBackoff() throws {
