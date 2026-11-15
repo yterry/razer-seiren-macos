@@ -1,13 +1,24 @@
 name: Release
 
-# Tag-triggered: pushing a v* tag builds the .app, zips it with a checksum, and
-# creates a GitHub Release.
+# Pushing a v* tag builds the .app, zips it with a checksum, and creates a
+# GitHub Release. Every other run is a dry run that publishes nothing:
+#
+# - A pull request that touches the release path builds, tests, packages and
+#   verifies an ad-hoc (unsigned) app as version 0.0.0-pr.
+# - A manual run (`gh workflow run release.yml -f version=X.Y.Z -f sign=true`)
+#   builds the given version, and with sign=true also signs, notarizes and runs
+#   the signed-mode verification.
+#
+# Both leave the zip, its checksum and the release notes as a workflow artifact
+# and write the notes a tag would publish to the job summary. Only the publish
+# job, which runs on tag pushes alone, can write to the repository.
 #
 # Signing is opt-in via repository secrets. When MACOS_CERT_P12 (and friends)
 # are present, the build is Developer-ID-signed, notarized, and stapled -
-# Gatekeeper opens it with no warning. Without the secrets, the workflow falls
+# Gatekeeper opens it with no warning. Without the secrets, a tag push falls
 # back to the ad-hoc build with the one-time-bypass release notes, so a release
-# can never fail just because signing isn't configured.
+# can never fail just because signing isn't configured. A manual run with
+# sign=true fails instead of falling back to the ad-hoc build.
 #
 # Required secrets for signed releases:
 #   MACOS_CERT_P12       base64 of the "Developer ID Application" .p12 export
@@ -18,14 +29,40 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without the leading v
+        type: string
+        default: 0.0.0-dryrun
+      sign:
+        description: Sign, notarize and run the signed-mode checks
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/**
+      - Makefile
+      - Package.swift
+      - Driver/**
+
+# A second run for the same ref waits for the first instead of overlapping it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write   # required for gh release create
+  contents: read
 
 jobs:
-  release:
-    name: Build & publish release
+  build:
+    name: Build & verify release
     runs-on: macos-15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -34,15 +71,29 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Derive version from tag
+      # From the tag on a tag push, from the input on a manual run, and a
+      # fixed placeholder on a pull request.
+      - name: Derive version
         id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            push)              VERSION="${GITHUB_REF_NAME#v}" ;;
+            workflow_dispatch) VERSION="${INPUT_VERSION}" ;;
+            *)                 VERSION="0.0.0-pr" ;;
+          esac
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Test
         run: make test
 
+      # Skipped on pull requests and on manual runs without sign=true, so
+      # those always build ad-hoc.
       - name: Import Developer ID certificate
         id: sign
+        if: github.event_name == 'push' || inputs.sign
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -52,6 +103,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CERT_P12}" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              echo "::error::A signed dry run needs the MACOS_CERT_P12 secret; it is missing, so nothing was signed."
+              exit 1
+            fi
             echo "No MACOS_CERT_P12 secret - packaging ad-hoc (unsigned)."
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -97,7 +152,8 @@ jobs:
           # Universal, so the app opens on Intel Macs too (Info.plist says
           # macOS 13+, which still includes Intel models).
           ARCHS: arm64 x86_64
-        run: VERSION="${{ steps.ver.outputs.version }}" scripts/package.sh
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: scripts/package.sh
 
       # Keep the signed build even if notarization times out or fails - the
       # zip can then be notarized/stapled manually instead of rebuilding.
@@ -115,28 +171,71 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-        run: VERSION="${{ steps.ver.outputs.version }}" scripts/notarize.sh
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: scripts/notarize.sh
 
       - name: Verify release archive
         env:
           SIGNED: ${{ steps.sign.outputs.signed }}
-        run: scripts/verify-release.sh "dist/Seiren-${{ steps.ver.outputs.version }}.zip" "${{ steps.ver.outputs.version }}"
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: scripts/verify-release.sh "dist/Seiren-${VERSION}.zip" "${VERSION}"
+
+      - name: Write release notes
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if [ "${SIGNED}" = "true" ]; then
+            NOTES="Automated build for ${TAG}. Signed with a Developer ID and notarized by Apple - opens with no Gatekeeper warning. Install with \`brew install --cask razer-seiren\` (after \`brew tap yterry/tap\`), update with \`brew update && brew upgrade --cask razer-seiren\`, or grab the zip below. macOS asks for Microphone permission on first launch; the Lighting menu asks for Input Monitoring on first use."
+          else
+            NOTES="Automated build for ${TAG}. Unsigned .app - see the README 'Install' section for the one-time Gatekeeper bypass (or just \`brew install --cask razer-seiren\`, which clears it for you). macOS asks for Microphone permission on first launch (required to monitor, EQ, and denoise your voice)."
+          fi
+          printf '%s\n' "${NOTES}" > dist/release-notes.md
+          if [ "${GITHUB_EVENT_NAME}" != "push" ]; then
+            {
+              echo "## Release notes for ${TAG} (dry run, not published)"
+              echo
+              cat dist/release-notes.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release
+          path: |
+            dist/Seiren-${{ steps.ver.outputs.version }}.zip
+            dist/Seiren-${{ steps.ver.outputs.version }}.zip.sha256
+            dist/release-notes.md
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: macos-15
+    permissions:
+      contents: write   # required for gh release create
+    steps:
+      - name: Download release archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release
+          path: dist
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          SIGNED: ${{ steps.sign.outputs.signed }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          if [ "${SIGNED}" = "true" ]; then
-            NOTES="Automated build for ${GITHUB_REF_NAME}. Signed with a Developer ID and notarized by Apple - opens with no Gatekeeper warning. Install with \`brew install --cask razer-seiren\` (after \`brew tap yterry/tap\`), update with \`brew update && brew upgrade --cask razer-seiren\`, or grab the zip below. macOS asks for Microphone permission on first launch; the Lighting menu asks for Input Monitoring on first use."
-          else
-            NOTES="Automated build for ${GITHUB_REF_NAME}. Unsigned .app - see the README 'Install' section for the one-time Gatekeeper bypass (or just \`brew install --cask razer-seiren\`, which clears it for you). macOS asks for Microphone permission on first launch (required to monitor, EQ, and denoise your voice)."
-          fi
           gh release create "${GITHUB_REF_NAME}" \
-            "dist/Seiren-${{ steps.ver.outputs.version }}.zip" \
-            "dist/Seiren-${{ steps.ver.outputs.version }}.zip.sha256" \
+            "dist/Seiren-${VERSION}.zip" \
+            "dist/Seiren-${VERSION}.zip.sha256" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "${NOTES}"
+            --notes-file dist/release-notes.md
 
       # Auto-bump the Homebrew tap so `brew upgrade` sees the new version. This is
       # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a fine-grained
@@ -154,7 +253,7 @@ jobs:
         continue-on-error: true
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -uo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then

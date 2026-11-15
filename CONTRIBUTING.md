@@ -222,6 +222,27 @@ In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
    If it did, bump both `CFBundleShortVersionString` and `CFBundleVersion` in `Driver/SeirenFX/Info.plist` to the same new version.
    The app offers to update Seiren FX only when the bundled `CFBundleShortVersionString` is higher than the installed one, so a driver change without a bump never reaches users who already have Seiren FX.
 3. If the driver changed, run the on-Mac driver checklist below and record the result of each check in the pull request that bumps the driver version.
+4. Run the release workflow as a signed dry run on the commit you will tag.
+   It runs every step a tag runs up to the release, including signing, notarization and the signed-mode checks in `scripts/verify-release.sh`, and publishes nothing.
+   ```sh
+   gh workflow run release.yml -f version=X.Y.Z -f sign=true
+   gh run watch                              # pick the Release run
+   gh run download <run-id> -n release -D /tmp/seiren-dry-run
+   ```
+   The run must pass.
+   A signed dry run fails loudly when the `MACOS_CERT_P12` signing certificate secret is missing, instead of building ad-hoc.
+   Its summary shows the release notes a `vX.Y.Z` tag would publish.
+   They must say "Signed with a Developer ID and notarized by Apple".
+   The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment`, then the line `source=Notarized Developer ID`, and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
+   That `source=Notarized Developer ID` line is the Gatekeeper evidence for the build.
+   Quit any installed `Seiren.app` and unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`.
+   `gh run download` does not mark files as downloaded from the internet, so Gatekeeper ignores the app until you quarantine it:
+   ```sh
+   xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" /tmp/seiren-dry-run/Seiren.app
+   spctl --assess --type execute -vv /tmp/seiren-dry-run/Seiren.app
+   open /tmp/seiren-dry-run/Seiren.app
+   ```
+   `spctl` must print `accepted` and `source=Notarized Developer ID`, and the app must open with no Gatekeeper warning.
 
 The app's own version comes from the tag: `scripts/package.sh` writes it into `Seiren.app`, so there is no app version to bump by hand.
 
@@ -265,7 +286,7 @@ Before you start, quit any installed `Seiren.app` and note the default input and
 ```sh
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
-gh run list --workflow release.yml --limit 1
+gh run list --workflow release.yml --event push --limit 1
 gh run watch <run-id>
 ```
 
