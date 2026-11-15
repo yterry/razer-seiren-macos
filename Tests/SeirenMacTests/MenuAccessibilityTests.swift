@@ -72,6 +72,56 @@ final class MenuAccessibilityTests: XCTestCase {
         XCTAssertEqual(cell.accessibilityValueDescription(), "25%")
     }
 
+    func testMixerRowMuteButtonCarriesItsLabelAndValueOnItsCell() throws {
+        let unmuted = MixerChannelView(channel: MixerEngine.Channel(source: .voice, name: "Voice", level: 0.7),
+                                       icon: nil) { _ in }
+        let unmutedCell = try muteCell(in: unmuted)
+        XCTAssertEqual(unmutedCell.accessibilityLabel(), "Voice: Mute on stream")
+        XCTAssertEqual(unmutedCell.accessibilityValue() as? String, "Unmuted")
+
+        let muted = MixerChannelView(channel: MixerEngine.Channel(source: .voice, name: "Voice", level: 0.7,
+                                                                  muted: true),
+                                     icon: nil) { _ in }
+        let mutedCell = try muteCell(in: muted)
+        XCTAssertEqual(mutedCell.accessibilityLabel(), "Voice: Unmute on stream")
+        XCTAssertEqual(mutedCell.accessibilityValue() as? String, "Muted")
+    }
+
+    func testMixerRowMuteButtonLabelAndValueFollowUpdates() throws {
+        let row = MixerChannelView(channel: MixerEngine.Channel(source: .voice, name: "Voice", level: 0.7),
+                                   icon: nil) { _ in }
+        let cell = try muteCell(in: row)
+
+        row.update(MixerEngine.Channel(source: .app(bundleID: "com.example.music"), name: "Music",
+                                       level: 0.25, muted: true))
+        XCTAssertEqual(cell.accessibilityLabel(), "Music: Unmute on stream")
+        XCTAssertEqual(cell.accessibilityValue() as? String, "Muted")
+
+        row.update(MixerEngine.Channel(source: .app(bundleID: "com.example.music"), name: "Music",
+                                       level: 0.25, muted: false))
+        XCTAssertEqual(cell.accessibilityLabel(), "Music: Mute on stream")
+        XCTAssertEqual(cell.accessibilityValue() as? String, "Unmuted")
+    }
+
+    func testMixerRowHidesItsNameValueAndIconFromAccessibility() throws {
+        let row = MixerChannelView(channel: MixerEngine.Channel(source: .voice, name: "Voice", level: 0.7),
+                                   icon: NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)) { _ in }
+        let fields = row.subviews.compactMap { $0 as? NSTextField }
+        let name = try XCTUnwrap(fields.first { $0.stringValue == "Voice" })
+        let value = try XCTUnwrap(fields.first { $0.stringValue == "70%" })
+        let icon = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertEqual(name.cell?.isAccessibilityElement(), false)
+        XCTAssertEqual(value.cell?.isAccessibilityElement(), false)
+        XCTAssertEqual(icon.cell?.isAccessibilityElement(), false)
+
+        // VoiceOver reaches only the slider and the mute button.
+        let slider = try XCTUnwrap(row.subviews.compactMap { $0 as? PercentSlider }.first)
+        let exposed = try XCTUnwrap(row.accessibilityChildren()).map { $0 as AnyObject }
+        XCTAssertEqual(exposed.count, 2)
+        XCTAssertTrue(exposed.contains { $0 === slider.cell })
+        XCTAssertTrue(exposed.contains { $0 === (try? muteCell(in: row)) })
+    }
+
     func testPercentSliderReadsEdgeAndOutOfRangeValuesAsTheClampedPercentage() throws {
         let unit = PercentSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
         let unitCell = try XCTUnwrap(unit.cell)
@@ -94,6 +144,15 @@ final class MenuAccessibilityTests: XCTestCase {
         let item = AppDelegate.lightingBrightnessItem(percent: 180, target: nil)
         let slider = try XCTUnwrap(item.view?.subviews.compactMap { $0 as? PercentSlider }.first)
         XCTAssertEqual(slider.cell?.accessibilityValueDescription(), "100%")
+    }
+
+    func testPercentSliderWithAnEmptyRangeReadsZeroPercent() throws {
+        let slider = PercentSlider(value: 5, minValue: 5, maxValue: 5, target: nil, action: nil)
+        XCTAssertEqual(slider.cell?.accessibilityValueDescription(), "0%")
+    }
+
+    private func muteCell(in row: MixerChannelView) throws -> NSCell {
+        try XCTUnwrap(row.subviews.compactMap { $0 as? NSButton }.first?.cell)
     }
 
     private func caption(in view: NSView) throws -> NSTextField {
