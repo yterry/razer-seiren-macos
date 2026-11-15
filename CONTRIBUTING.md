@@ -276,7 +276,7 @@ Before you start, quit any installed `Seiren.app` and note the default input and
 ```sh
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
-gh run list --workflow release.yml --limit 1
+gh run list --workflow release.yml --event push --limit 1
 gh run watch <run-id>
 ```
 
