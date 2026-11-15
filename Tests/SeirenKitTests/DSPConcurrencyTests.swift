@@ -75,10 +75,10 @@ final class DSPConcurrencyTests: XCTestCase {
             for i in 0..<10_000 {
                 let preset = i.isMultiple(of: 2) ? unity : quarter
                 preset.withUnsafeBufferPointer { seiren_dsp_publish($0.baseAddress, Int32(preset.count / 5)) }
-                // seiren_dsp_publish frees a block two publishes after replacing
-                // it and assumes the audio thread has finished with it by then,
-                // which a publish per audio buffer or slower guarantees. Faster
-                // publishing is unsafe until issue #86 is fixed.
+                // seiren_dsp_publish frees the block it replaced on the next
+                // publish and assumes the audio thread has finished with it by
+                // then, which at most one publish per audio buffer guarantees.
+                // Faster publishing is unsafe until issue #86 is fixed.
                 waitForReader()
             }
         }, reader: {
