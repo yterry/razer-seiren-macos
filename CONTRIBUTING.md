@@ -220,11 +220,19 @@ In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
    gh run download <run-id> -n release -D /tmp/seiren-dry-run
    ```
    The run must pass.
+   A signed dry run fails loudly when the `MACOS_CERT_P12` signing certificate secret is missing, instead of building ad-hoc.
    Its summary shows the release notes a `vX.Y.Z` tag would publish.
    They must say "Signed with a Developer ID and notarized by Apple"; the unsigned notes mean the signing secrets were not picked up.
-   The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment` and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
-   Quit any installed `Seiren.app`, unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`, and open `/tmp/seiren-dry-run/Seiren.app`.
-   It must open with no Gatekeeper warning.
+   The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment`, then the line `source=Notarized Developer ID`, and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
+   That `source=Notarized Developer ID` line is the Gatekeeper evidence for the build.
+   Quit any installed `Seiren.app` and unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`.
+   `gh run download` does not mark files as downloaded from the internet, so Gatekeeper ignores the app until you quarantine it:
+   ```sh
+   xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" /tmp/seiren-dry-run/Seiren.app
+   spctl --assess --type execute -vv /tmp/seiren-dry-run/Seiren.app
+   open /tmp/seiren-dry-run/Seiren.app
+   ```
+   `spctl` must print `accepted` and `source=Notarized Developer ID`, and the app must open with no Gatekeeper warning.
 
 The app's own version comes from the tag: `scripts/package.sh` writes it into `Seiren.app`, so there is no app version to bump by hand.
 

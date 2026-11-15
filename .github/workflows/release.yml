@@ -102,6 +102,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CERT_P12}" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              echo "::error::A signed dry run needs the MACOS_CERT_P12 secret; it is missing, so nothing was signed."
+              exit 1
+            fi
             echo "No MACOS_CERT_P12 secret - packaging ad-hoc (unsigned)."
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
