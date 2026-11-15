@@ -32,6 +32,17 @@ final class SeirenKitTests: XCTestCase {
         XCTAssertEqual(model?.monitorSupported, false)
     }
 
+    func testV2XRegisteredWithoutChromaLighting() {
+        // The V2 X: headphone jack, no vendor control page - its only HID
+        // interface is Consumer Control (volume keys), which the app never writes.
+        let model = DeviceRegistry.all().first { $0.pid == 0x0543 }
+        XCTAssertNotNil(model)
+        XCTAssertEqual(model?.name, "Razer Seiren V2 X")
+        XCTAssertEqual(model?.hidUsagePage, 0x000C)
+        XCTAssertEqual(model?.chromaLighting, false)
+        XCTAssertEqual(model?.monitorSupported, false)
+    }
+
     func testChromaLightingDefaultsToFalseWhenAbsentFromJSON() throws {
         // A contributed devices/*.json that predates the capability flag must
         // not silently opt its model into the lighting send path.

@@ -43,6 +43,7 @@ are — this is the fix.
 |---|---|---|---|---|
 | **Seiren V3 Pro** | verified on hardware | ✅ headphone jack | ✅ via Seiren FX | ✅ 12-LED Chroma ring |
 | **Seiren V3 Mini** | verified with a stand-in device | - no headphone jack | ✅ via Seiren FX | - mute LED only |
+| **Seiren V2 X** | detected on hardware (probe) | ✅ headphone jack | ✅ via Seiren FX | - no lighting |
 | Other Seirens | untested | if it has a jack | ✅ via Seiren FX | - |
 
 No V3 Mini has been tested on a Mac yet: its support was tested with another input-only audio device ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#11-razer-seiren-v3-mini-from-its-usb-descriptors)).
