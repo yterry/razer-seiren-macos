@@ -76,20 +76,31 @@ extension AppDelegate {
         remove.isHidden = appChannels.isEmpty
         menu.addItem(remove)
         menu.addItem(.separator())
-        switch mixer.state {
-        case .running: menu.addItem(disabledItem("Live · mixing into Seiren Stream Mix"))
+        for item in Self.mixerStateItems(state: mixer.state, voiceOff: engine.mode == .off, target: self) {
+            menu.addItem(item)
+        }
+    }
+
+    /// The lines at the bottom of the Stream Mixer menu: what the mixer is
+    /// doing, and a note when monitoring is Off. A separator keeps that note
+    /// apart from the error block when the mixer failed.
+    static func mixerStateItems(state: MixerEngine.State, voiceOff: Bool, target: AnyObject?) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        switch state {
+        case .running: items.append(disabledItem("Live · mixing into Seiren Stream Mix"))
         case .failed(let code):
-            menu.addItem(disabledItem("Couldn't start the Stream Mixer"))
-            menu.addItem(disabledItem(CoreAudioCode.errorDescription(code)))
-            let retry = NSMenuItem(title: "Try Again", action: #selector(retryMixer), keyEquivalent: "")
-            retry.target = self
-            menu.addItem(retry)
-        default: menu.addItem(disabledItem("Starts when an app records Seiren Stream Mix"))
+            items.append(disabledItem("Couldn't start the Stream Mixer"))
+            items.append(disabledItem(CoreAudioCode.errorDescription(code)))
+            let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryMixer), keyEquivalent: "")
+            retry.target = target
+            items.append(retry)
+        default: items.append(disabledItem("Starts when an app records Seiren Stream Mix"))
         }
-        if engine.mode == .off {
-            if case .failed = mixer.state { menu.addItem(.separator()) }
-            menu.addItem(disabledItem("Voice is silent while monitoring is Off"))
+        if voiceOff {
+            if case .failed = state { items.append(.separator()) }
+            items.append(disabledItem("Voice is silent while monitoring is Off"))
         }
+        return items
     }
 
     /// An open app that can get its own Stream Mixer channel.

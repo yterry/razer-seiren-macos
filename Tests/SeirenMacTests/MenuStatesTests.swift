@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import SeirenKit
 import XCTest
 @testable import seiren_mac
@@ -62,6 +63,41 @@ final class MenuStatesTests: XCTestCase {
 
     func testUnpluggedLightingWithNoDeviceErrorShowsOnlyTheConnectLine() {
         assertUnpluggedLightingShowsOnlyTheConnectLine(lastError: .noDevice)
+    }
+
+    func testAFailedMixerWithVoiceOffSeparatesTheErrorBlockFromTheVoiceLine() throws {
+        let target = NSObject()
+        let items = AppDelegate.mixerStateItems(state: .failed(kAudioHardwareIllegalOperationError), voiceOff: true,
+                                                target: target)
+        XCTAssertEqual(items.map(\.title), ["Couldn't start the Stream Mixer",
+                                            "Core Audio error 'nope' (1852797029)",
+                                            "Try Again", "",
+                                            "Voice is silent while monitoring is Off"])
+        XCTAssertEqual(items.map(\.isSeparatorItem), [false, false, false, true, false])
+        XCTAssertFalse(items[0].isEnabled)
+        XCTAssertFalse(items[1].isEnabled)
+        let retry = items[2]
+        XCTAssertTrue(retry.isEnabled)
+        XCTAssertEqual(retry.action, NSSelectorFromString("retryMixer"))
+        XCTAssertTrue(retry.target === target)
+        XCTAssertTrue(AppDelegate.instancesRespond(to: NSSelectorFromString("retryMixer")))
+        XCTAssertFalse(items[4].isEnabled)
+    }
+
+    func testAFailedMixerWithVoiceOnHasNoSeparatorOrVoiceLine() {
+        let items = AppDelegate.mixerStateItems(state: .failed(kAudioHardwareIllegalOperationError), voiceOff: false,
+                                                target: nil)
+        XCTAssertEqual(items.map(\.title), ["Couldn't start the Stream Mixer",
+                                            "Core Audio error 'nope' (1852797029)", "Try Again"])
+        XCTAssertFalse(items.contains(where: \.isSeparatorItem))
+    }
+
+    func testARunningMixerWithVoiceOffPutsTheVoiceLineDirectlyUnderTheLiveLine() {
+        let items = AppDelegate.mixerStateItems(state: .running, voiceOff: true, target: nil)
+        XCTAssertEqual(items.map(\.title), ["Live · mixing into Seiren Stream Mix",
+                                            "Voice is silent while monitoring is Off"])
+        XCTAssertFalse(items.contains(where: \.isSeparatorItem))
+        XCTAssertFalse(items.contains(where: \.isEnabled))
     }
 
     private func assertUnpluggedLightingShowsOnlyTheConnectLine(lastError: LightingError,
