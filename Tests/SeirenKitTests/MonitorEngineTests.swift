@@ -654,6 +654,32 @@ final class MonitorEngineTests: XCTestCase {
         }
     }
 
+    func testSampleRateChangesKeepLimiterReleaseAt120Milliseconds() {
+        let engine = makeEngine()
+        defer {
+            seiren_dsp_publish(nil, 0)
+            engine.configureSampleRate(48000)
+            engine.shutdown()
+        }
+        let unity: [Float] = [1, 0, 0, 0, 0]   // an EQ section that changes nothing
+        let ceiling = pow(10.0, -1.0 / 20)
+        for rate in [48000.0, 96000] {
+            engine.configureSampleRate(rate)
+            unity.withUnsafeBufferPointer { seiren_dsp_publish($0.baseAddress, 1) }
+            var burst: [Float] = [2]
+            burst.withUnsafeMutableBufferPointer { seiren_dsp_process_mono($0.baseAddress, 1, 0) }
+            func gain(after seconds: Double) -> Double {
+                let frames = Int(rate * seconds)
+                var quiet = [Float](repeating: 0.1, count: frames)
+                quiet.withUnsafeMutableBufferPointer { seiren_dsp_process_mono($0.baseAddress, Int32(frames), 0) }
+                return Double(quiet.last!) / 0.1
+            }
+            // One 120 ms time constant takes back 1 - exp(-1) of the reduction.
+            XCTAssertEqual(gain(after: 0.120), 1 - (1 - ceiling / 2) * exp(-1), accuracy: 0.002)
+            XCTAssertEqual(gain(after: 0.480), 1, accuracy: 0.01)
+        }
+    }
+
     func testRunPolicyTable() {
         let mini = MonitorEngine.Source(device: mic(1, "Seiren"), isSeiren: true)
         let pro = MonitorEngine.Source(device: mic(1, "Seiren", output: true), isSeiren: true)

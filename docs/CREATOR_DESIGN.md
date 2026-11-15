@@ -81,7 +81,7 @@ Rejected:
 Signal chain in the proc (one buffer pass, no second graph):
 
 ```
-mic ch0 → [Noise Suppression] → [EQ biquad cascade] → × gain (gMonitorLevel) → clamp → fan to outputs
+mic ch0 → [Noise Suppression] → [EQ biquad cascade] → limiter → × gain (gMonitorLevel) → fan to outputs
 ```
 
 EQ is recursive (IIR) → **~0 added latency**. NS goes *before* EQ so EQ shapes clean voice (see §4). Gain stays last as post-EQ make-up.
@@ -99,7 +99,7 @@ EQ is recursive (IIR) → **~0 added latency**. NS goes *before* EQ so EQ shapes
 
 **Denormal protection (reviewer missing-consideration):** set FTZ/DAZ in the proc thread (flush-to-zero) to avoid IIR-state denormal CPU spikes during silence.
 
-**Clipping (reviewer missing-consideration):** clamp the post-EQ sample to `[-1, 1]` (or a soft limiter) at the chain end so a +12 dB boost cannot hard-clip the DAC.
+**Clipping (reviewer missing-consideration):** a peak limiter follows the EQ so a +12 dB boost cannot hard-clip the DAC. Its behavior is described in `Sources/SeirenDSP/include/SeirenDSP.h`.
 
 ### 3.3 Swift API sketch
 

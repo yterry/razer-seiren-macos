@@ -247,9 +247,9 @@ The "~0.3 ms" claim was **FIR group delay only** and is wrong as a total. Real a
 
 ## 4. ±32768 scaling (review CRITICAL — anchored to THIS pipeline)
 
-This pipeline is **entirely normalized to ±1.0**: CoreAudio Float32 is ±1.0, `seiren_dsp_process` clamps to [-1,1] (`SeirenDSP.c:124`), and the gate threshold `0.00316` (`SeirenDSP.c:42`) is linear in ±1.0 terms. RNNoise wants **int16-scaled floats (±32768), NOT ±1.0**.
+This pipeline is **entirely normalized to ±1.0**: CoreAudio Float32 is ±1.0, the post-EQ limiter in `seiren_dsp_process` keeps output below ±1.0 (see `Sources/SeirenDSP/include/SeirenDSP.h`), and the gate threshold `0.00316` (`SeirenDSP.c:42`) is linear in ±1.0 terms. RNNoise wants **int16-scaled floats (±32768), NOT ±1.0**.
 
-**Containment:** the scale lives **only inside `seiren_dsp_studio_process`**, on the 480-sample frame, immediately around the `process` call (see 3.2 step 3): `*= 32768.0f` before, `*= 1/32768.0f` after. Nothing else in the chain — gate, EQ, the [-1,1] clamp, the IOProc fan-out — sees anything but ±1.0. The scale is **never** smeared across the Swift IOProc.
+**Containment:** the scale lives **only inside `seiren_dsp_studio_process`**, on the 480-sample frame, immediately around the `process` call (see 3.2 step 3): `*= 32768.0f` before, `*= 1/32768.0f` after. Nothing else in the chain — gate, EQ, the post-EQ limiter, the IOProc fan-out — sees anything but ±1.0. The scale is **never** smeared across the Swift IOProc.
 
 **Committed unit test:** a full-scale ±1.0 sine fed through `studio_process` survives the round trip at **±1.0** (asserting it isn't near-silent *or* clipped) — proving the scale pairs correctly and the invariant holds.
 
@@ -259,7 +259,7 @@ This pipeline is **entirely normalized to ±1.0**: CoreAudio Float32 is ±1.0, `
 
 ### 5.1 Chain order (resolved)
 
-`deinterleave → GATE → STUDIO (RNNoise) → EQ → clamp → fan out`
+`deinterleave → GATE → STUDIO (RNNoise) → EQ → limiter → fan out`
 
 - **Gate first:** removes between-word room noise so RNNoise sees cleaner input and the EQ shapes already-cleaned voice (matches the existing "gate before EQ" comment at `MonitorEngine.swift:115` and `SeirenDSP.h`).
 - **Studio and gate are NOT mutually exclusive at the C level** — but the *user-facing modes* are a single 3-way choice (below), so in practice only one of {gate, studio} is active. The C functions are independent no-ops when disabled, so the chain is always the same straight line.

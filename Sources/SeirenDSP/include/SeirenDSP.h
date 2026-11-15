@@ -62,20 +62,27 @@ void seiren_dsp_publish(const float *coeffs, int nSections);
 /// @param frames      Number of frames (sample groups).
 /// @param channels    Channels per frame (clamped to SEIREN_DSP_MAX_CHANNELS).
 ///
-/// Per-channel biquad state persists across calls. Output is clamped to
-/// [-1, 1] so EQ boosts cannot hard-clip the DAC. Denormal filter state is
-/// flushed to zero to avoid CPU spikes during silence.
+/// Per-channel biquad state persists across calls. A peak limiter linked
+/// across each frame's channels (instant attack, 120 ms release, -1 dBFS
+/// ceiling) follows the EQ, so a boost turns loud speech down instead of
+/// cutting it flat. Denormal filter state is flushed to zero to avoid CPU
+/// spikes during silence.
 void seiren_dsp_process(float *interleaved, int frames, int channels);
 
 /// Apply the published EQ to a MONO buffer using an independent filter-state
 /// bank selected by `stateIndex` (0..SEIREN_DSP_MAX_CHANNELS-1). Lets two mono
 /// signals (e.g. a low-latency monitor and a denoised broadcast) run the same
-/// EQ with separate history. RT-safe; same coefficients as seiren_dsp_process.
+/// EQ with separate history, each bank with its own limiter. RT-safe; same
+/// coefficients and limiter as seiren_dsp_process.
 void seiren_dsp_process_mono(float *mono, int frames, int stateIndex);
 
-/// Zero all per-channel filter state. Call when the stream/format changes (e.g.
-/// sample-rate change or device switch) so stale history doesn't ring. Cheap;
-/// safe to call from the main thread between IO cycles.
+/// Set the device sample rate, which times the EQ limiter's 120 ms release
+/// (48 kHz until called). Call between IO cycles, like seiren_dsp_reset.
+void seiren_dsp_set_sample_rate(double sampleRate);
+
+/// Zero all per-channel filter and limiter state. Call when the stream/format
+/// changes (e.g. sample-rate change or device switch) so stale history doesn't
+/// ring. Cheap; safe to call from the main thread between IO cycles.
 void seiren_dsp_reset(void);
 
 // MARK: - Noise gate
