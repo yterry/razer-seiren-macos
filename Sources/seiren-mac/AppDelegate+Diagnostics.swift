@@ -24,7 +24,8 @@ extension AppDelegate {
             mode: engine.mode, state: engine.state, inputPreference: engine.inputPreference,
             activeSource: engine.activeSource, routesThroughFX: engine.isRoutingThroughFX,
             fxRouteFailure: engine.fxRouteFailure, standbyRunning: engine.isStandbyRunning,
-            route: engine.routeDiagnostics, recordingBundleIDs: engine.recordingBundleIDs)
+            route: engine.routeDiagnostics, stalls: engine.routeStalls,
+            recordingBundleIDs: engine.recordingBundleIDs)
         let mixerState = DiagnosticsSnapshot.Mixer(
             enabled: mixer.isEnabled, availability: mixer.availability, state: mixer.state,
             channelCount: mixer.channels.count, diagnostics: mixer.diagnostics)

@@ -35,12 +35,14 @@ public struct DiagnosticsSnapshot {
         public var fxRouteFailure: Int32?
         public var standbyRunning: Bool
         public var route: MonitorEngine.RouteDiagnostics
+        /// `MonitorEngine.routeStalls` at the time of the snapshot.
+        public var stalls: Int
         public var recordingBundleIDs: [String]
 
         public init(mode: MonitorEngine.Mode, state: MonitorEngine.State,
                     inputPreference: MonitorEngine.InputPreference, activeSource: MonitorEngine.InputDevice?,
                     routesThroughFX: Bool, fxRouteFailure: Int32?, standbyRunning: Bool,
-                    route: MonitorEngine.RouteDiagnostics,
+                    route: MonitorEngine.RouteDiagnostics, stalls: Int,
                     recordingBundleIDs: [String]) {
             self.mode = mode
             self.state = state
@@ -50,6 +52,7 @@ public struct DiagnosticsSnapshot {
             self.fxRouteFailure = fxRouteFailure
             self.standbyRunning = standbyRunning
             self.route = route
+            self.stalls = stalls
             self.recordingBundleIDs = recordingBundleIDs
         }
     }
@@ -168,6 +171,7 @@ public enum DiagnosticsReport {
                   "  Recording apps: \(e.recordingBundleIDs.isEmpty ? "none" : e.recordingBundleIDs.joined(separator: ", "))",
                   "  Route: \(r.callbacks) callbacks, \(r.inputBuffers) in / \(r.outputBuffers) out buffers, " +
                       "\(r.monitorBuffers) source outputs, \(Int(r.sampleRate)) Hz, mic peak \(dBFS(r.inputPeak))",
+                  "  Stalls: \(e.stalls)",
                   ""]
 
         lines.append("Devices")

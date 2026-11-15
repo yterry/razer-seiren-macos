@@ -729,6 +729,210 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    // MARK: A route whose callbacks stop
+
+    func testStalledRouteIsTornDownAfterSixSecondsAndStartedAgainFiveSecondsLater() throws {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        let firstAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let firstRoute = IOProc(kind: .route, device: firstAggregate)
+
+        // The device stays listed, but the HAL stops calling the IOProc.
+        var mark = hardware.calls.count
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 5.9)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+
+        clock.advance(by: 0.1)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareNotRunningError))
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertEqual(engine.routeStalls, 1)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(firstRoute), .destroyIOProc(firstRoute), .destroyAggregate(firstAggregate),
+        ])
+        XCTAssertTrue(hardware.ioProcs.isEmpty)
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+
+        mark = hardware.calls.count
+        hardware.routeCallbacksFrozen = false
+        clock.advance(by: 4.9)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [], "no attempt before 5 s")
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareNotRunningError))
+
+        clock.advance(by: 0.1)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRetryScheduled, "a restart that works clears the failure")
+        let secondAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let secondRoute = IOProc(kind: .route, device: secondAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(secondAggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(secondRoute), .startIOProc(secondRoute),
+        ])
+
+        // The restarted route keeps cycling and is left alone.
+        mark = hardware.calls.count
+        clock.advance(by: 60)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.routeStalls, 1)
+        XCTAssertEqual(stallLogEntries(since: marker), ["route stalled: no callbacks for 6 s"])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testCallbacksThatPauseForFourSecondsAndResumeLeaveTheRouteAlone() {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+
+        // Two pauses of two unchanged checks each, with one moving check
+        // between them: the count of unchanged checks starts over.
+        let mark = hardware.calls.count
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 4)
+        hardware.routeCallbacksFrozen = false
+        clock.advance(by: 2)
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 4)
+        hardware.routeCallbacksFrozen = false
+        clock.advance(by: 60)
+
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.routeStalls, 0)
+        XCTAssertEqual(stallLogEntries(since: marker), [])
+
+        // Mode off stops the check with the route.
+        engine.setMode(.off)
+        XCTAssertEqual(clock.pendingTimerCount, 0, "timers left after mode off")
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testRepeatedStallsOnTheSameDevicesBackOffAndTheCountResetsOnceCallbacksResume() {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
+        let engine = makeEngine(on: hardware)
+        let monitor = IOProc(kind: .monitor, device: seiren.id)
+        engine.setMode(.always)
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 6)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareNotRunningError))
+
+        // Each restart works, then stalls again 6 s later.
+        for delay in [5.0, 10, 20, 60, 60] {
+            var mark = hardware.calls.count
+            clock.advance(by: delay - 0.1)
+            XCTAssertEqual(lifecycleCalls(hardware, since: mark), [], "no attempt before \(delay) s")
+
+            clock.advance(by: 0.1)
+            XCTAssertEqual(engine.state, .running, "after \(delay) s")
+            XCTAssertFalse(engine.isRetryScheduled)
+            XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.createIOProc(monitor), .startIOProc(monitor)])
+
+            mark = hardware.calls.count
+            clock.advance(by: 6)
+            XCTAssertEqual(engine.state, .failed(kAudioHardwareNotRunningError))
+            XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.stopIOProc(monitor), .destroyIOProc(monitor)])
+        }
+        XCTAssertEqual(engine.routeStalls, 6)
+        XCTAssertEqual(stallLogEntries(since: marker),
+                       Array(repeating: "route stalled: no callbacks for 6 s", count: 6))
+
+        // The next restart keeps cycling, so a later stall waits 5 s again.
+        hardware.routeCallbacksFrozen = false
+        clock.advance(by: 60)
+        XCTAssertEqual(engine.state, .running)
+        clock.advance(by: 2)
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 6)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareNotRunningError))
+        let mark = hardware.calls.count
+        clock.advance(by: 4.9)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        clock.advance(by: 0.1)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.createIOProc(monitor), .startIOProc(monitor)])
+        XCTAssertEqual(engine.routeStalls, 7)
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testModeOffPartwayThroughAFreezeStopsTheStallCheckAndStartsNothing() throws {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertNotNil(hardware.aggregates.first)
+
+        // One unchanged check has passed when the user turns monitoring off.
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 3)
+        XCTAssertEqual(engine.state, .running)
+        engine.setMode(.off)
+        XCTAssertEqual(engine.state, .stopped)
+        // Deliver the device-list event that destroying the aggregate queued.
+        clock.advance(by: 0)
+        XCTAssertEqual(clock.pendingTimerCount, 0, "the stall check must stop with the route")
+
+        // Run well past the 6 s stall and the 5 s retry.
+        let mark = hardware.calls.count
+        clock.advance(by: 30)
+        XCTAssertEqual(engine.state, .stopped)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [])
+        XCTAssertEqual(engine.routeStalls, 0)
+        XCTAssertEqual(stallLogEntries(since: marker), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testAutoRouteStoppedWhenTheRecorderLeavesPartwayThroughAFreezeIsNotRestarted() throws {
+        let marker = logMarker()
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.auto)
+        XCTAssertEqual(engine.state, .waiting)
+        let waitingTimers = clock.pendingTimerCount
+
+        hardware.recorders = [recorder(on: fx.id)]
+        hardware.fireRunningStateChanged(on: fx.id)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertNotNil(hardware.aggregates.first)
+
+        // One unchanged check has passed when the call app stops recording;
+        // the route stops after the 1 s grace period, before a stall is due.
+        hardware.routeCallbacksFrozen = true
+        clock.advance(by: 3)
+        XCTAssertEqual(engine.state, .running)
+        hardware.recorders = []
+        hardware.fireRunningStateChanged(on: fx.id)
+        clock.advance(by: 1.5)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+        XCTAssertFalse(hardware.ioProcs.contains { $0.kind == .route })
+        XCTAssertEqual(clock.pendingTimerCount, waitingTimers, "the stall check must stop with the route")
+
+        // Run well past the 6 s stall and the 5 s retry.
+        let mark = hardware.calls.count
+        clock.advance(by: 30)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark).filter { $0.involvesRoute }, [])
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+        XCTAssertEqual(engine.routeStalls, 0)
+        XCTAssertEqual(stallLogEntries(since: marker), [])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     // MARK: Edge cases
 
     func testDeviceEventsFromTheFailedStartsOwnAggregateDoNotBypassTheBackoff() throws {
@@ -1020,6 +1224,20 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Logs a unique entry, so a test reads only the entries logged after it.
+    private func logMarker() -> String {
+        let marker = "scenario \(UUID().uuidString)"
+        EventLog.shared.log(category: .system, message: "\(marker)")
+        return marker
+    }
+
+    private func stallLogEntries(since marker: String) -> [String] {
+        let recent = EventLog.shared.recent
+        let start = recent.lastIndex { $0.message == marker } ?? recent.startIndex
+        return recent[start...].filter { $0.category == .route && $0.message.hasPrefix("route stalled") }
+            .map(\.message)
+    }
 
     private func makeEngine(on hardware: FakeAudioHardware,
                             microphoneAccess: (@MainActor () -> MonitorEngine.MicrophoneAccess)? = nil)
