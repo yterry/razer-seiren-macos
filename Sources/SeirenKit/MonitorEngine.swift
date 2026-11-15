@@ -1171,6 +1171,7 @@ public final class MonitorEngine {
     func configureSampleRate(_ rate: Double) {
         liveSampleRate = rate
         eqEngine.setSampleRate(rate)
+        seiren_dsp_set_sample_rate(rate)
         eqEngine.reset()
         applyNoiseSuppression()
     }

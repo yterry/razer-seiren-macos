@@ -79,6 +79,48 @@ static float g_z[SEIREN_DSP_MAX_CHANNELS][SEIREN_DSP_MAX_SECTIONS][2];
 // dodge subnormal-float CPU spikes during silence.
 #define SEIREN_DENORMAL_EPS 1.0e-20f
 
+// --- Peak limiter ------------------------------------------------------------
+// Instant attack, one-pole 120 ms release toward unity, -1 dBFS ceiling. Shared
+// by the voice EQ (one per state bank) and the Stream Mixer's bus. Without
+// look-ahead the first over-level sample lands exactly on the ceiling and the
+// gain then stays down for the release, so the following cycles are scaled
+// instead of cut flat.
+#define LIMITER_CEILING 0.891250938f  // -1 dBFS
+// expf(-1 / (0.120 * 48000)): the release at 48 kHz, until a rate is set.
+#define LIMITER_RELEASE_48K 0.999826404f
+
+typedef struct {
+    float gain;     // gain applied to the last frame, 0...1
+    float release;  // per-frame one-pole coefficient for the 120 ms release
+} peak_limiter;
+
+static float limiter_release(double sampleRate)
+{
+    return expf(-1.0f / (0.120f * (float)(sampleRate > 0 ? sampleRate : 48000)));
+}
+
+// The gain for a frame whose largest magnitude across its channels is `peak`.
+static float limiter_gain(peak_limiter *l, float peak)
+{
+    float required = peak > LIMITER_CEILING ? LIMITER_CEILING / peak : 1;
+    l->gain = fminf(required, 1 - (1 - l->gain) * l->release);
+    return l->gain;
+}
+
+static float limiter_clamp(float s)
+{
+    // Clamp rounding at the ceiling without changing the gain.
+    return fmaxf(-LIMITER_CEILING, fminf(LIMITER_CEILING, s));
+}
+
+// One limiter per filter-state bank, owned by the RT thread like g_z: gains are
+// reset by seiren_dsp_reset, the release by seiren_dsp_set_sample_rate, both
+// between IO cycles.
+_Static_assert(SEIREN_DSP_MAX_CHANNELS == 2, "one initializer per state bank");
+static peak_limiter g_limiter[SEIREN_DSP_MAX_CHANNELS] = {
+    {1, LIMITER_RELEASE_48K}, {1, LIMITER_RELEASE_48K},
+};
+
 // --- Noise gate --------------------------------------------------------------
 // Params are set off-thread and read on the RT thread as independent relaxed
 // atomics: a buffer that overlaps a reconfigure may mix old and new values,
@@ -163,6 +205,7 @@ void seiren_dsp_process(float *interleaved, int frames, int channels)
     const int ns = b->nSections;
 
     for (int f = 0; f < frames; f++) {
+        float peak = 0;
         for (int c = 0; c < channels; c++) {
             float s = interleaved[f * channels + c];
 
@@ -190,9 +233,15 @@ void seiren_dsp_process(float *interleaved, int frames, int channels)
                 s = y;
             }
 
-            // Post-EQ clamp: a boost must never hard-clip past full scale.
-            if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
             interleaved[f * channels + c] = s;
+            peak = fmaxf(peak, fabsf(s));
+        }
+        // Post-EQ limiter, linked across the frame's channels, so a boost is
+        // turned down instead of being cut flat.
+        const float gain = limiter_gain(&g_limiter[0], peak);
+        for (int c = 0; c < channels; c++) {
+            float *s = &interleaved[f * channels + c];
+            *s = limiter_clamp(*s * gain);
         }
     }
 }
@@ -228,14 +277,20 @@ void seiren_dsp_process_mono(float *x, int frames, int stateIndex)
             g_z[stateIndex][i][1] = z2;
             s = y;
         }
-        if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
-        x[f] = s;
+        x[f] = limiter_clamp(s * limiter_gain(&g_limiter[stateIndex], fabsf(s)));
     }
+}
+
+void seiren_dsp_set_sample_rate(double sampleRate)
+{
+    for (int c = 0; c < SEIREN_DSP_MAX_CHANNELS; c++)
+        g_limiter[c].release = limiter_release(sampleRate);
 }
 
 void seiren_dsp_reset(void)
 {
     memset(g_z, 0, sizeof(g_z));
+    for (int c = 0; c < SEIREN_DSP_MAX_CHANNELS; c++) g_limiter[c].gain = 1;
     memset(g_gate_env, 0, sizeof(g_gate_env));
     memset(g_gate_gain, 0, sizeof(g_gate_gain));
     memset(g_gate_hold, 0, sizeof(g_gate_hold));
@@ -420,7 +475,7 @@ struct SeirenMixer {
     int mixOutput;
     _Atomic(float) targets[SEIREN_MIXER_MAX_CHANNELS];
     float previous[SEIREN_MIXER_MAX_CHANNELS];
-    float limiterGain, release;
+    peak_limiter limiter;
     _Atomic(uint64_t) callbacks;
     _Atomic(uint32_t) inputBuffers, outputBuffers;
     _Atomic(float) inputPeaks[SEIREN_MIXER_MAX_INPUTS];
@@ -444,8 +499,7 @@ SeirenMixer *seiren_mixer_create(double sampleRate, int mixOutput) {
     atomic_init(&m->outputBuffers, 0);
     atomic_init(&m->outputPeak, 0);
     m->mixOutput = mixOutput;
-    m->limiterGain = 1;
-    m->release = expf(-1.0f / (0.120f * (float)(sampleRate > 0 ? sampleRate : 48000)));
+    m->limiter = (peak_limiter){1, limiter_release(sampleRate)};
     return m;
 }
 
@@ -501,7 +555,6 @@ void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBuf
     for (int c = 0; c < SEIREN_MIXER_MAX_CHANNELS; ++c)
         targets[c] = atomic_load_explicit(&m->targets[c], memory_order_relaxed);
     float *dest = out->mData;
-    const float ceiling = 0.891250938f; // -1 dBFS
     float outputPeak = 0;
     for (UInt32 f = 0; f < frames; ++f) {
         float left = 0, right = 0;
@@ -518,13 +571,9 @@ void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBuf
             left += (isfinite(l) ? l : 0) * gain;
             right += (isfinite(r) ? r : 0) * gain;
         }
-        float peak = fmaxf(fabsf(left), fabsf(right));
-        float required = peak > ceiling ? ceiling / peak : 1;
-        m->limiterGain = fminf(required, 1 - (1 - m->limiterGain) * m->release);
-        left *= m->limiterGain; right *= m->limiterGain;
-        // Clamp rounding at the ceiling without changing the linked gain.
-        left = fmaxf(-ceiling, fminf(ceiling, left));
-        right = fmaxf(-ceiling, fminf(ceiling, right));
+        float gain = limiter_gain(&m->limiter, fmaxf(fabsf(left), fabsf(right)));
+        left = limiter_clamp(left * gain);
+        right = limiter_clamp(right * gain);
         dest[f * out->mNumberChannels] = left;
         if (out->mNumberChannels > 1) dest[f * out->mNumberChannels + 1] = right;
         outputPeak = fmaxf(outputPeak, fmaxf(fabsf(left), fabsf(right)));
