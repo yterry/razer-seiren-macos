@@ -244,6 +244,24 @@ final class MixerEngineFakeHardwareTests: XCTestCase {
         assertShutdownLeavesNothing(mixer, hardware)
     }
 
+    func testRetryNowThatWorksLogsTheRecovery() {
+        let (hardware, mixer) = makeIdleMixer()
+        let mark = EventLog.shared.recent.last
+        hardware.startResults = [kAudioHardwareNotRunningError]
+        startRecording(obs, on: hardware)
+        XCTAssertEqual(mixer.state, .failed(kAudioHardwareNotRunningError))
+
+        mixer.retryNow()
+
+        XCTAssertEqual(mixer.state, .running)
+        XCTAssertEqual(mixerMessages(after: mark), [
+            "start failed: status=\(kAudioHardwareNotRunningError)",
+            "start: 3 channels, 2 taps",
+            "start recovered after 2 attempts",
+        ])
+        assertShutdownLeavesNothing(mixer, hardware)
+    }
+
     func testTurningTheMixerOffAndOnStartsAtOnce() {
         let (hardware, mixer) = makeIdleMixer()
         hardware.startResults = [kAudioHardwareNotRunningError]

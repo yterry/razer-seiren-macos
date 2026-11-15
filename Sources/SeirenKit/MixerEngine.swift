@@ -223,6 +223,8 @@ public final class MixerEngine {
     private var mixObserved: AudioObjectID?
     private var snapshot: Snapshot?
     private var startFailure: StartFailure?
+    /// Failed starts since the last working one, for the event log only.
+    private var failedStarts = 0
     private var aggregate: AudioObjectID?
     private var proc: AudioDeviceIOProcID?
     /// AudioDeviceStart succeeded, so teardown stops a running mixer.
@@ -266,6 +268,7 @@ public final class MixerEngine {
             debounce?.cancel(); debounce = nil
             // Turning the mixer back on retries at once.
             startFailure = nil
+            failedStarts = 0
         }
         reconcile()
         if changed { notify() }
@@ -405,9 +408,10 @@ public final class MixerEngine {
             isStarted = true
             EventLog.shared.log(category: .mixer, message:
                 "start: \(channels.count) channels, \(lastDiagnostics.taps.count) taps")
-            if let previous, previous.snapshot == current {
+            if failedStarts > 0 {
                 EventLog.shared.log(category: .mixer, message:
-                    "start recovered after \(previous.consecutiveFailures + 1) attempts")
+                    "start recovered after \(failedStarts + 1) attempts")
+                failedStarts = 0
             }
             state = .running
         } else {
@@ -415,6 +419,7 @@ public final class MixerEngine {
             if previous?.snapshot != current || previous?.status != status {
                 EventLog.shared.log(category: .mixer, message: "start failed: status=\(status)")
             }
+            failedStarts += 1
             teardown(); state = .failed(status)
         }
         startFailure = StartFailure.recording(result: state, snapshot: current,
