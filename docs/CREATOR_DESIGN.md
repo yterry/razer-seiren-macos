@@ -90,7 +90,7 @@ EQ is recursive (IIR) → **~0 added latency**. NS goes *before* EQ so EQ shapes
 - Coefficients are POD only: a fixed-size `malloc`'d block of `BiquadCoeffs { b0,b1,b2,a1,a2: Float }`. **No Swift `Array`, no protocol/existential, no class-via-`Unmanaged` on the RT path** — those incur ARC/witness-table traffic the proc forbids.
 - Published via a **real atomic** with release/acquire ordering: `Atomic<UnsafeRawPointer?>` (Swift `Synchronization`) *or* C11 `atomic_store_explicit(memory_order_release)`. A plain `var` store is **not** sufficient (no barrier → RT thread can read a half-initialized block). **Note:** `Synchronization` is macOS 15+; the package floor is macOS 13 → **use C11 atomics** (or a tiny C shim) to keep the floor.
 - Filter **state** (`z1,z2` per section) is a separate pre-allocated raw buffer owned by the RT thread, advanced in place. On a coeffs swap, state runs through (transient inaudible).
-- The old coeff block is freed on the **main thread one reconcile cycle later** (deferred free), never on the RT thread.
+- The old coeff block is freed on the publishing thread only after the RT thread has given it up, never on the RT thread. The handoff is described in `Sources/SeirenDSP/include/SeirenDSP.h`.
 - `gEQEnabled` is a `nonisolated(unsafe) Bool` (torn-read-harmless, like `gMonitorLevel`).
 
 **DSP math:** RBJ Audio-EQ-Cookbook (peaking / low-shelf / high-shelf / HPF), normalized by `a0`, computed off-thread at the device's actual `Fs`.

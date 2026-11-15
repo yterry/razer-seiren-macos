@@ -12,12 +12,9 @@ import SeirenDSP
 /// out-of-bounds access. The assertions catch torn or garbage reads.
 final class DSPConcurrencyTests: XCTestCase {
     override func tearDown() {
-        // Leave the process-wide DSP state as the other tests expect it. Two
-        // disabling calls each also free the block retired by the previous call.
-        seiren_dsp_publish(nil, 0)
+        // Leave the process-wide DSP state as the other tests expect it.
         seiren_dsp_publish(nil, 0)
         seiren_dsp_set_gate(0, -50, 48000)
-        seiren_dsp_set_studio(0)
         seiren_dsp_set_studio(0)
         seiren_dsp_reset()
         super.tearDown()
@@ -26,9 +23,7 @@ final class DSPConcurrencyTests: XCTestCase {
     /// Runs `reader` repeatedly on its own thread while `writer` runs on another,
     /// and returns how many times the reader ran. The reader starts first and
     /// keeps going until the writer has finished, so the two always overlap.
-    /// The writer gets a function that waits until the reader has started and
-    /// finished a whole pass since the call.
-    private func runConcurrently(writer: @escaping @Sendable (_ waitForReader: () -> Void) -> Void,
+    private func runConcurrently(writer: @escaping @Sendable () -> Void,
                                  reader: @escaping @Sendable () -> Void) -> Int {
         let writerDone = OSAllocatedUnfairLock(initialState: false)
         let readerStarted = DispatchSemaphore(value: 0)
@@ -48,11 +43,7 @@ final class DSPConcurrencyTests: XCTestCase {
         group.enter()
         Thread {
             readerStarted.wait()
-            writer {
-                // The pass in progress may predate the call, so wait for two.
-                let target = readerRuns.withLock { $0 } + 2
-                while readerRuns.withLock({ $0 }) < target {}
-            }
+            writer()
             writerDone.withLock { $0 = true }
             group.leave()
         }.start()
@@ -71,15 +62,10 @@ final class DSPConcurrencyTests: XCTestCase {
         let frames = 256
         let mismatches = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: { waitForReader in
-            for i in 0..<10_000 {
+        let runs = runConcurrently(writer: {
+            for i in 0..<100_000 {
                 let preset = i.isMultiple(of: 2) ? unity : quarter
                 preset.withUnsafeBufferPointer { seiren_dsp_publish($0.baseAddress, Int32(preset.count / 5)) }
-                // seiren_dsp_publish frees the block it replaced on the next
-                // publish and assumes the audio thread has finished with it by
-                // then, which at most one publish per audio buffer guarantees.
-                // Faster publishing is unsafe until issue #86 is fixed.
-                waitForReader()
             }
         }, reader: {
             var buffer = [Float](repeating: input, count: frames)
@@ -93,24 +79,28 @@ final class DSPConcurrencyTests: XCTestCase {
 
         XCTAssertGreaterThan(runs, 0)
         XCTAssertEqual(mismatches.withLock { $0 }, 0, "buffers processed with a torn coefficient block")
+
+        // The last publish was `quarter`, and it must be in effect from the
+        // next buffer on, however many publishes it followed closely.
+        var buffer = [Float](repeating: input, count: frames)
+        seiren_dsp_process_mono(&buffer, Int32(frames), 0)
+        XCTAssertEqual(buffer, [Float](repeating: input * 0.25, count: frames),
+                       "the last published preset is not in effect")
     }
 
     func testGateAndStudioToggleWhileProcessing() {
         let frames = 480
+        let input = (0..<frames).map { Float(sin(Double($0) * 0.05)) * 0.2 }
         let nonFinite = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: { waitForReader in
-            for i in 0..<200 {
+        let runs = runConcurrently(writer: {
+            for i in 0..<2_000 {
                 let on: Int32 = i.isMultiple(of: 2) ? 1 : 0
                 seiren_dsp_set_gate(on, i.isMultiple(of: 4) ? -50 : -30, 48000)
                 seiren_dsp_set_studio(on)
-                // seiren_dsp_set_studio has the same timing assumption as
-                // seiren_dsp_publish, and also resets the audio thread's frame
-                // bridge, until issue #86 is fixed.
-                waitForReader()
             }
         }, reader: {
-            var buffer = (0..<frames).map { Float(sin(Double($0) * 0.05)) * 0.2 }
+            var buffer = input
             buffer.withUnsafeMutableBufferPointer { p in
                 seiren_dsp_gate(p.baseAddress, Int32(frames), 1)
                 seiren_dsp_studio_process(p.baseAddress, Int32(frames), 0)
@@ -122,6 +112,15 @@ final class DSPConcurrencyTests: XCTestCase {
 
         XCTAssertGreaterThan(runs, 0)
         XCTAssertEqual(nonFinite.withLock { $0 }, 0, "gate or Studio produced samples outside [-1, 1]")
+
+        // The last toggle turned both off, so the next buffer must pass through
+        // untouched.
+        var buffer = input
+        buffer.withUnsafeMutableBufferPointer { p in
+            seiren_dsp_gate(p.baseAddress, Int32(frames), 1)
+            seiren_dsp_studio_process(p.baseAddress, Int32(frames), 0)
+        }
+        XCTAssertEqual(buffer, input, "the last toggle to off is not in effect")
     }
 
     func testMixerGainWhileProcessing() throws {
@@ -157,7 +156,7 @@ final class DSPConcurrencyTests: XCTestCase {
         let proc = try XCTUnwrap(seiren_mixer_proc())
         let outOfRange = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: { _ in
+        let runs = runConcurrently(writer: {
             let mixer = OpaquePointer(bitPattern: mixerAddress)
             for i in 0..<100_000 {
                 seiren_mixer_set_gain(mixer, Int32(i % 2), i.isMultiple(of: 3) ? 0 : 1)

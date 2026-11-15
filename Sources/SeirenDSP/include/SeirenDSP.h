@@ -10,11 +10,15 @@
 //  publishes them here; the IOProc calls seiren_dsp_process().
 //
 //  The coefficient handoff is lock-free: a new immutable coefficient block is
-//  published with a C11 atomic store-release; the RT thread loads it with
-//  acquire ordering. The old block is freed one publish later ("deferred free")
-//  so the RT thread can never dereference freed memory. (We target macOS 13, so
-//  Swift's Synchronization.Atomic — macOS 15+ — is unavailable; C11 <stdatomic.h>
-//  is the portable choice.)
+//  published into a C11 atomic slot, and the RT thread takes it out with an
+//  atomic exchange at the start of its next call. From then on the RT thread
+//  owns the block, and the same exchange leaves the block it replaces in the
+//  slot for the publishing thread to free on its next publish. A block is
+//  therefore freed only after the RT thread has given it up, however fast
+//  blocks are published, and the RT thread never frees, allocates or waits.
+//  The RNNoise state for Studio is handed over the same way. (We target
+//  macOS 13, so Swift's Synchronization.Atomic — macOS 15+ — is unavailable;
+//  C11 <stdatomic.h> is the portable choice.)
 //
 
 #ifndef SEIREN_DSP_H
@@ -42,9 +46,11 @@ extern "C" {
 ///                  DISABLE the EQ — the RT thread will then pass audio through
 ///                  untouched.
 ///
-/// Thread-safety: safe to call concurrently with seiren_dsp_process(). Internally
-/// allocates a new block, atomically swaps it in (release ordering), and frees
-/// the block retired by the *previous* publish (deferred free).
+/// Thread-safety: safe to call concurrently with seiren_dsp_process() and
+/// seiren_dsp_process_mono() running on one RT thread, at any rate. Internally
+/// allocates a new block and publishes it for the RT thread to pick up at the
+/// start of its next call. Frees the block that was waiting in its place:
+/// either one the RT thread never picked up, or the one it last handed back.
 void seiren_dsp_publish(const float *coeffs, int nSections);
 
 /// Apply the currently-published EQ to an interleaved float buffer, in place.
@@ -105,14 +111,16 @@ void seiren_dsp_downsample2(const float *in, float *out, int outFrames);
 void seiren_dsp_upsample2(const float *in, float *out, int inFrames);
 
 /// Enable/disable Studio (RNNoise) NS. Call OFF the real-time thread — it
-/// allocates/frees the RNNoise state. Publishes the state atomically; the RT
-/// processor is a no-op until a state is published, and again once disabled.
+/// allocates/frees the RNNoise state. Hands the state to the RT thread the same
+/// way as seiren_dsp_publish, so it is safe at any rate; the RT processor is a
+/// no-op until it picks up a state, and again once it picks up the disable.
 void seiren_dsp_set_studio(int enabled);
 
 /// Apply Studio NS in place to a mono buffer. REAL-TIME SAFE; a no-op when
 /// disabled. `rateIs96k` != 0 runs the 2:1 resampler (the buffer is 96 kHz);
 /// 0 means the buffer is already 48 kHz. Maintains an internal 480-sample
-/// frame bridge (latency ≈ one frame + accumulation), cleared by reset.
+/// frame bridge (latency ≈ one frame + accumulation), cleared by reset and by
+/// this function when it picks up a newly enabled state.
 void seiren_dsp_studio_process(float *mono, int frames, int rateIs96k);
 
 // MARK: - Stream mixer

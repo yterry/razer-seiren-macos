@@ -7,24 +7,68 @@
 
 #include <math.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+// --- Handoff of heap objects to the audio thread -----------------------------
+// The configuring thread publishes immutable heap objects (EQ coefficient
+// blocks, RNNoise states) for the one audio thread to use. Each object has
+// exactly one owner at a time, and ownership moves only by an atomic exchange
+// on `slot`:
+//
+//   publisher -> `slot`, tagged new -> audio thread (`current`)
+//             -> `slot`, untagged   -> publisher
+//
+// Only the owner reads an object, and the publisher frees one only after taking
+// it back out of the slot. The audio thread owns `current` from the exchange
+// that took it until the exchange that gives it back, so an object it can still
+// reach is never freed, however fast publishes come. The audio thread does at
+// most one load and one exchange per call: no lock, allocation, free or retry.
+typedef struct {
+    // A published object the audio thread has not adopted yet (HANDOFF_NEW set;
+    // a NULL pointer then means "turn off"), or the object the audio thread
+    // gave back, or 0.
+    _Atomic(uintptr_t) slot;
+    void *current;  // audio thread only: the object in use; NULL ⇒ off
+} rt_handoff;
+
+// Tag in the low bit of `slot`, which heap pointers never use.
+#define HANDOFF_NEW ((uintptr_t)1)
+
+// Publisher side: make `next` (NULL ⇒ off) the object the audio thread adopts
+// at the start of its next call.
+static void handoff_publish(rt_handoff *h, void *next, void (*destroy)(void *))
+{
+    // What comes back was published and never adopted, or was given back by the
+    // audio thread. Either way nothing else can reach it any more.
+    uintptr_t old = atomic_exchange(&h->slot, (uintptr_t)next | HANDOFF_NEW);
+    void *unreachable = (void *)(old & ~HANDOFF_NEW);
+    if (unreachable != NULL) destroy(unreachable);
+}
+
+// Audio thread side: make the newly published object, if there is one,
+// h->current. Returns nonzero when it adopted one.
+static int handoff_adopt(rt_handoff *h)
+{
+    // Only this thread clears the tag, so once seen it is still set at the
+    // exchange, which then takes a published object (the latest one) and leaves
+    // the replaced one for the publisher to free.
+    if (!(atomic_load(&h->slot) & HANDOFF_NEW)) return 0;
+    uintptr_t next = atomic_exchange(&h->slot, (uintptr_t)h->current);
+    h->current = (void *)(next & ~HANDOFF_NEW);
+    return 1;
+}
+
 // An immutable, heap-allocated coefficient block. Once published it is never
-// mutated; a change means publishing a brand-new block and retiring the old one.
+// mutated; a change means publishing a brand-new block.
 typedef struct {
     int   nSections;
     float c[SEIREN_DSP_MAX_SECTIONS][SEIREN_DSP_COEFFS_PER_SECTION]; // {b0,b1,b2,a1,a2}
 } eq_block;
 
-// The live coefficients, swapped atomically. NULL ⇒ EQ disabled (passthrough).
-static _Atomic(eq_block *) g_coeffs = NULL;
-
-// The block retired by the *previous* publish. Touched only on the publishing
-// (main) thread. Freed on the next publish, by which point the RT thread — which
-// reloads g_coeffs every buffer — can no longer be holding it. This deferred
-// free is what makes the lock-free swap safe.
-static eq_block *g_retired = NULL;
+// The coefficient handoff. No current block ⇒ EQ disabled (passthrough).
+static rt_handoff g_eq;
 
 // Per-channel, per-section biquad state (Direct Form II Transposed): z1, z2.
 // Owned exclusively by the RT thread (and zeroed by seiren_dsp_reset between
@@ -79,9 +123,8 @@ static float g_st_tmp48[STUDIO_RING];                              // scratch (d
 static float g_st_in[STUDIO_FRAME], g_st_out[STUDIO_FRAME];        // one RNNoise frame, scaled
 static int   g_studio_primed = 0;     // drop RNNoise's first (warmup) output frame
 
-// DenoiseState handoff (same deferred-free discipline as the EQ coeffs).
-static _Atomic(void *) g_studio_state   = NULL;  // opaque DenoiseState*; NULL = passthrough
-static void           *g_studio_retired = NULL;  // freed on the next set_studio call
+// DenoiseState handoff (same as the EQ coeffs). No current state ⇒ passthrough.
+static rt_handoff g_studio;
 
 void seiren_dsp_publish(const float *coeffs, int nSections)
 {
@@ -104,20 +147,13 @@ void seiren_dsp_publish(const float *coeffs, int nSections)
         }
     }
 
-    // Swap the new block in; get the one it replaced.
-    eq_block *old = atomic_exchange_explicit(&g_coeffs, nb, memory_order_acq_rel);
-
-    // Free the block retired two publishes ago — the RT thread has long since
-    // moved on from it. Then remember `old` as the newly retired block.
-    if (g_retired != NULL) {
-        free(g_retired);
-    }
-    g_retired = old;
+    handoff_publish(&g_eq, nb, free);
 }
 
 void seiren_dsp_process(float *interleaved, int frames, int channels)
 {
-    eq_block *b = atomic_load_explicit(&g_coeffs, memory_order_acquire);
+    handoff_adopt(&g_eq);
+    const eq_block *b = g_eq.current;
     if (b == NULL || b->nSections <= 0 || interleaved == NULL || frames <= 0) {
         return; // EQ disabled → passthrough
     }
@@ -163,7 +199,8 @@ void seiren_dsp_process(float *interleaved, int frames, int channels)
 
 void seiren_dsp_process_mono(float *x, int frames, int stateIndex)
 {
-    eq_block *b = atomic_load_explicit(&g_coeffs, memory_order_acquire);
+    handoff_adopt(&g_eq);
+    const eq_block *b = g_eq.current;
     if (b == NULL || b->nSections <= 0 || x == NULL || frames <= 0) return;
     if (stateIndex < 0 || stateIndex >= SEIREN_DSP_MAX_CHANNELS) stateIndex = 0;
 
@@ -248,30 +285,29 @@ void seiren_dsp_upsample2(const float *in, float *out, int inFrames)
 
 // --- Studio (RNNoise) -------------------------------------------------------
 
+static void studio_destroy(void *st) { rnnoise_destroy((DenoiseState *)st); }
+
 void seiren_dsp_set_studio(int enabled)
 {
     void *publish = NULL;
     if (enabled) {
         DenoiseState *st = rnnoise_create(NULL);   // ALLOCATES — caller is off the RT thread
         if (st == NULL) return;                     // leave current state untouched
-        // The previous state is NULL here (we only enter studio from off/gate),
-        // so the RT thread is in passthrough and not touching the bridge — safe
-        // to reset it before publishing the new state.
-        memset(g_ds_z, 0, sizeof(g_ds_z));
-        memset(g_us_z, 0, sizeof(g_us_z));
-        g_in_count = 0; g_out_count = 0; g_studio_primed = 0;
         publish = st;
     }
-    void *old = atomic_exchange_explicit(&g_studio_state, publish, memory_order_acq_rel);
-    if (g_studio_retired != NULL) {
-        rnnoise_destroy((DenoiseState *)g_studio_retired);  // retired one call ago → RT done with it
-    }
-    g_studio_retired = old;
+    handoff_publish(&g_studio, publish, studio_destroy);
 }
 
 void seiren_dsp_studio_process(float *x, int frames, int rateIs96k)
 {
-    DenoiseState *st = (DenoiseState *)atomic_load_explicit(&g_studio_state, memory_order_acquire);
+    // A new state starts from an empty frame bridge and resampler history.
+    // Both belong to this thread, so it clears them as it adopts the state.
+    if (handoff_adopt(&g_studio) && g_studio.current != NULL) {
+        memset(g_ds_z, 0, sizeof(g_ds_z));
+        memset(g_us_z, 0, sizeof(g_us_z));
+        g_in_count = 0; g_out_count = 0; g_studio_primed = 0;
+    }
+    DenoiseState *st = (DenoiseState *)g_studio.current;
     if (st == NULL || x == NULL || frames <= 0) return;        // disabled → passthrough
     if (rateIs96k && (frames & 1)) return;                     // need even count to halve
 
