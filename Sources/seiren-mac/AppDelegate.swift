@@ -120,8 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
         updateStandbyAllowed()
 
-        crashReport = Self.unseenCrashReport(in: Self.diagnosticReportsDirectory,
-                                             seenAt: settings.crashReportSeenAt)
+        crashReport = Self.unseenCrashReport(in: Self.diagnosticReportsDirectory, settings: settings)
         rebuildMenu()
 
         updateChecker.onChange = { [weak self] in self?.rebuildMenu() }
@@ -1233,12 +1232,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     static let bugReportURL = URL(string:
         "https://github.com/yterry/razer-seiren-macos/issues/new?template=bug.yml")!
 
-    /// This app's newest crash report in `directory` written after `seenAt`, or
-    /// nil. A missing or unreadable directory logs one entry and returns nil.
-    static func unseenCrashReport(in directory: URL, seenAt: Date?) -> URL? {
+    /// This app's newest crash report in `directory` written after the stored
+    /// `crashReportSeenAt`, or nil. With no stored time (a new install, or the
+    /// first launch of a version with this check) it stores `now` and offers
+    /// nothing, so reports from before this version ran are never offered.
+    /// A missing or unreadable directory logs one entry and returns nil.
+    static func unseenCrashReport(in directory: URL, settings: Settings, now: Date = Date()) -> URL? {
+        guard let seenAt = settings.crashReportSeenAt else {
+            settings.crashReportSeenAt = now
+            return nil
+        }
         do {
             return try CrashReportFinder.newestReport(in: directory, processName: "seiren-mac",
-                                                      after: seenAt ?? .distantPast)
+                                                      after: seenAt)
         } catch {
             // The error text names the folder, whose path has the account name.
             let error = error as NSError
@@ -1250,11 +1256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     @objc private func copyCrashReport() {
         guard let url = crashReport else { return }
-        settings.crashReportSeenAt = Date()
         do {
             let report = try String(contentsOf: url, encoding: .utf8)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(report, forType: .string)
+            settings.crashReportSeenAt = Date()
         } catch {
             presentError("Couldn't read the crash report: \(error.localizedDescription)")
         }

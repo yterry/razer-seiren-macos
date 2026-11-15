@@ -89,7 +89,8 @@ public final class Settings {
     // MARK: Crash reports
 
     /// When the user last acted on the "quit unexpectedly" menu section. Crash
-    /// reports from before it are not offered again; nil offers any report.
+    /// reports from before it are not offered again. The app stores the launch
+    /// time when this is nil, so reports from before that launch are never offered.
     public var crashReportSeenAt: Date? {
         get { defaults.object(forKey: Key.crashSeenAt) as? Date }
         set { defaults.set(newValue, forKey: Key.crashSeenAt) }

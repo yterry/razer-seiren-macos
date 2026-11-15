@@ -13,25 +13,53 @@ final class CrashReportTests: XCTestCase {
         return directory
     }
 
-    func testReportIsOfferedUntilItHasBeenSeen() throws {
+    /// A throwaway suite stored in its own temporary directory, never the standard domain.
+    private func makeSettings() throws -> Settings {
         let directory = try makeDirectory()
-        let crashed = Date(timeIntervalSinceNow: -60)
+        let suiteName = directory.appendingPathComponent("defaults").path
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+        return Settings(defaults)
+    }
+
+    private func writeReport(in directory: URL, modified: Date) throws -> URL {
         let report = directory.appendingPathComponent("seiren-mac-2026-11-14-090000.ips")
         try Data("{}".utf8).write(to: report)
-        try FileManager.default.setAttributes([.modificationDate: crashed], ofItemAtPath: report.path)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: report.path)
+        return report
+    }
 
-        XCTAssertEqual(AppDelegate.unseenCrashReport(in: directory, seenAt: nil)?.lastPathComponent,
+    func testReportIsOfferedUntilItHasBeenSeen() throws {
+        let directory = try makeDirectory()
+        let settings = try makeSettings()
+        let crashed = Date(timeIntervalSinceNow: -60)
+        let report = try writeReport(in: directory, modified: crashed)
+
+        settings.crashReportSeenAt = crashed.addingTimeInterval(-1)
+        XCTAssertEqual(AppDelegate.unseenCrashReport(in: directory, settings: settings)?.lastPathComponent,
                        report.lastPathComponent)
-        XCTAssertEqual(AppDelegate.unseenCrashReport(in: directory, seenAt: crashed.addingTimeInterval(-1))?
-            .lastPathComponent, report.lastPathComponent)
-        XCTAssertNil(AppDelegate.unseenCrashReport(in: directory, seenAt: Date()))
+        settings.crashReportSeenAt = Date()
+        XCTAssertNil(AppDelegate.unseenCrashReport(in: directory, settings: settings))
+    }
+
+    func testFirstLaunchWithoutSeenTimeOffersOlderReportNeverAndStoresLaunchTime() throws {
+        let directory = try makeDirectory()
+        let settings = try makeSettings()
+        _ = try writeReport(in: directory, modified: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+        let launched = Date()
+
+        XCTAssertNil(AppDelegate.unseenCrashReport(in: directory, settings: settings, now: launched))
+        XCTAssertEqual(settings.crashReportSeenAt, launched)
+        XCTAssertNil(AppDelegate.unseenCrashReport(in: directory, settings: settings))
     }
 
     func testMissingDirectoryOffersNothingAndLogsOneEntry() throws {
         let missing = try makeDirectory().appendingPathComponent("DiagnosticReports", isDirectory: true)
+        let settings = try makeSettings()
+        settings.crashReportSeenAt = .distantPast
         let before = EventLog.shared.recent
 
-        XCTAssertNil(AppDelegate.unseenCrashReport(in: missing, seenAt: nil))
+        XCTAssertNil(AppDelegate.unseenCrashReport(in: missing, settings: settings))
 
         let added = Array(EventLog.shared.recent.dropFirst(before.count))
         XCTAssertEqual(added.count, 1)
