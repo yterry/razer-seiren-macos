@@ -323,7 +323,7 @@ Devices other than Seirens are listed by type only, but check that you are happy
 - On a Mac with a notch, menu bar icons that do not fit are hidden behind the camera.
   Quit or hide some other menu bar apps to make room.
 - On macOS 26 or later, open **System Settings → Menu Bar** and check that Seiren is allowed in the menu bar.
-- If you can't tell whether Seiren is running, open Activity Monitor and search for `seiren-mac`.
+- If you can't tell whether Seiren is running, open Activity Monitor and search for Seiren.
 
 ### "Microphone access denied"
 
@@ -353,9 +353,9 @@ Devices other than Seirens are listed by type only, but check that you are happy
 
 - This dialog appears when the install finished but macOS did not start the new audio device.
   Restart the Mac.
-- After the restart, open the 🎙 menu.
-  The version line near the bottom names the Seiren FX version instead of "Seiren FX not installed".
-- If it still says "Seiren FX not installed", choose **Voice ▸ Install Seiren FX…** again.
+- After the restart, open the 🎙 menu and then **Voice ▸**.
+  If it shows **Equalizer**, macOS loaded Seiren FX.
+- If it still offers **Install Seiren FX…**, choose it again.
   If that shows the same dialog, choose **Copy Diagnostics** and open a bug report with the text.
 - From a source checkout: `swift run seiren-probe driver-check` lists the Seiren FX devices macOS loaded and names each check that failed.
 
