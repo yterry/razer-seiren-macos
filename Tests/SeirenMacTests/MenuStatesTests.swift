@@ -55,4 +55,23 @@ final class MenuStatesTests: XCTestCase {
             XCTAssertFalse(menu.items.contains { $0.title.hasPrefix("Couldn't reach") }, "\(String(describing: error))")
         }
     }
+
+    func testUnpluggedLightingWithAStaleTransientErrorShowsOnlyTheConnectLine() {
+        assertUnpluggedLightingShowsOnlyTheConnectLine(lastError: .noReply)
+    }
+
+    func testUnpluggedLightingWithNoDeviceErrorShowsOnlyTheConnectLine() {
+        assertUnpluggedLightingShowsOnlyTheConnectLine(lastError: .noDevice)
+    }
+
+    private func assertUnpluggedLightingShowsOnlyTheConnectLine(lastError: LightingError,
+                                                                file: StaticString = #filePath,
+                                                                line: UInt = #line) {
+        let menu = AppDelegate.lightingMenu(lastError: lastError, deviceConnected: false, current: nil,
+                                            target: NSObject())
+        let titles = menu.items.map(\.title)
+        XCTAssertEqual(titles.first, "Applies when the Seiren is connected", file: file, line: line)
+        XCTAssertFalse(titles.contains { $0.hasPrefix("Couldn't reach") }, file: file, line: line)
+        XCTAssertFalse(titles.contains("Try Again"), file: file, line: line)
+    }
 }

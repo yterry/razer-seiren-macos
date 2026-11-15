@@ -89,7 +89,7 @@ extension AppDelegate {
         submenu.addItem(.separator())
         submenu.addItem(lightingBrightnessItem(percent: current?.brightnessPercent ?? 100, target: target))
 
-        if lastError != nil, lastError != .permissionDenied {
+        if deviceConnected, lastError != nil, lastError != .permissionDenied {
             submenu.addItem(.separator())
             submenu.addItem(disabledItem("Couldn't reach the mic's lighting"))
             let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryLighting), keyEquivalent: "")
