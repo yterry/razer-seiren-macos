@@ -1,6 +1,6 @@
 <!--
-Thanks for contributing! Keep PRs small and focused. CI (macos-15, swift build,
-scripts/test-driver.sh, swift test) must be green. See CONTRIBUTING.md.
+Thanks for contributing! Keep PRs small and focused. CI
+(.github/workflows/ci.yml) must be green. See CONTRIBUTING.md.
 -->
 
 ## What this changes

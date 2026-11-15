@@ -194,8 +194,7 @@ Then:
 2. Open a PR using the template — describe what you tested and on which device
    (name + PID + macOS version + `swift --version`). Paste relevant `seiren-probe`
    output for device work.
-3. CI (`.github/workflows/ci.yml`, `macos-15`, `swift build`, `scripts/test-driver.sh`, `swift test`) must
-   stay **green**. If it's red, it's not ready.
+3. CI (`.github/workflows/ci.yml`) must stay **green**. If it's red, it's not ready.
 
 Small, well-scoped PRs review fastest. Thank you.
 
@@ -218,7 +217,7 @@ The app's own version comes from the tag: `scripts/package.sh` writes it into `S
 
 ### On-Mac driver checklist
 
-`make test` runs the driver's logic in `Driver/SeirenFX/Tests.c`, but only a real Mac loads the plug-in into `coreaudiod`.
+`make test` runs the driver's logic in `Driver/SeirenFX/Tests.c`, and CI loads the built plug-in into `coreaudiod` on a hosted runner and runs `swift run seiren-probe driver-check`, but the checks below still need a real Mac.
 These checks need admin rights, a mic, and a calling app such as Teams, Zoom or Google Meet.
 Before you start, quit any installed `Seiren.app` and note the default input and output in System Settings ▸ Sound, then set them back when you are done.
 
@@ -230,6 +229,7 @@ Before you start, quit any installed `Seiren.app` and note the default input and
    Afterwards the update item is gone from the 🎙 menu.
    If you cannot use the packaged app, install the new driver with `scripts/build-driver.sh` and then `sudo scripts/install-driver.sh`, and record this check as not run.
 2. **Device topology.**
+   `swift run seiren-probe driver-check` prints the four Seiren FX devices and `Seiren FX driver check passed.`
    `swift run seiren-probe inputs` lists `Seiren FX` and `Seiren Stream Mix` with `streams: 1 in / 0 out`, and prints `Seiren FX installed: yes`.
    Neither `Seiren FX Feeder` nor `Seiren Stream Mix Feeder` appears in `system_profiler SPAudioDataType`.
    The feeders are hidden output devices that the app writes into.

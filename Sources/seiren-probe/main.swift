@@ -34,6 +34,8 @@ import SeirenKit
 //                                           # route when the probe records the mic); run
 //                                           # --fx-only with the app running in Auto.
 //   swift run seiren-probe procmon          # watch which processes record (for Auto mode)
+//   swift run seiren-probe driver-check     # check the installed Seiren FX driver's devices;
+//                                           # exits non-zero naming each failed check
 //
 // Lighting (vendor HID channel — see docs/PROTOCOL.md §6). The terminal app
 // needs Privacy → Input Monitoring the first time:
@@ -342,6 +344,63 @@ func runRoute(_ args: [String]) {
         print("Unexpected state \(engine.state).")
     }
     engine.shutdown()
+}
+
+// MARK: - driver-check
+
+/// Read one Seiren FX device for `DriverCheck`.
+func driverCheckDevice(_ dev: AudioObjectID) -> DriverCheck.Device {
+    func channels(_ scope: AudioObjectPropertyScope) -> [Int] {
+        objectIDs(dev, address(kAudioDevicePropertyStreams, scope)).map { stream in
+            var a = address(kAudioStreamPropertyVirtualFormat)
+            var format = AudioStreamBasicDescription()
+            var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            guard AudioObjectGetPropertyData(stream, &a, 0, nil, &size, &format) == noErr else { return 0 }
+            return Int(format.mChannelsPerFrame)
+        }
+    }
+    var ratesAddress = address(kAudioDevicePropertyAvailableNominalSampleRates)
+    var size: UInt32 = 0
+    var ranges: [AudioValueRange] = []
+    if AudioObjectGetPropertyDataSize(dev, &ratesAddress, 0, nil, &size) == noErr, size > 0 {
+        var buffer = [AudioValueRange](repeating: AudioValueRange(),
+                                       count: Int(size) / MemoryLayout<AudioValueRange>.size)
+        if AudioObjectGetPropertyData(dev, &ratesAddress, 0, nil, &size, &buffer) == noErr {
+            ranges = Array(buffer.prefix(Int(size) / MemoryLayout<AudioValueRange>.size))
+        }
+    }
+    let canBeDefault = address(kAudioDevicePropertyDeviceCanBeDefaultDevice, kAudioObjectPropertyScopeOutput)
+    return DriverCheck.Device(
+        isHidden: uint32(dev, address(kAudioDevicePropertyIsHidden)) == 1,
+        inputStreamChannels: channels(kAudioObjectPropertyScopeInput),
+        outputStreamChannels: channels(kAudioObjectPropertyScopeOutput),
+        canBeDefaultOutput: uint32(dev, canBeDefault) == 1,
+        sampleRates: ranges.map { $0.mMinimum...max($0.mMinimum, $0.mMaximum) })
+}
+
+/// Print the Seiren FX devices as a table and exit non-zero if the installed
+/// driver does not publish the 3.0 topology. CI runs this after installing
+/// the driver built from the pull request.
+@MainActor
+func runDriverCheck() -> Never {
+    let listed = AudioDevices.allDevices()
+    var devices: [String: DriverCheck.Device?] = [:]
+    for uid in DriverCheck.visibleUIDs {
+        devices[uid] = listed.first { AudioDevices.deviceUID($0) == uid }.map(driverCheckDevice)
+    }
+    for uid in DriverCheck.feederUIDs {
+        devices[uid] = AudioDevices.device(forUID: uid).map(driverCheckDevice)
+    }
+    print(DriverCheck.table(devices))
+    let failures = DriverCheck.failures(devices)
+    guard failures.isEmpty else {
+        print("")
+        for failure in failures { print("FAIL \(failure)") }
+        print("Seiren FX driver check failed: \(failures.count) check(s).")
+        exit(1)
+    }
+    print("\nSeiren FX driver check passed.")
+    exit(0)
 }
 
 // MARK: - inputs and reference recording
@@ -1151,6 +1210,7 @@ if CommandLine.arguments.count >= 2 {
     case "inputs": runInputs(); exit(0)
     case "listen": runListen(Array(CommandLine.arguments.dropFirst(2))); exit(0)
     case "startup": runStartup(Array(CommandLine.arguments.dropFirst(2))); exit(0)
+    case "driver-check": runDriverCheck()
     default: break
     }
 }

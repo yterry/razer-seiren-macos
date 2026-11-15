@@ -34,6 +34,28 @@ jobs:
           bash scripts/test-driver.sh
           swift test
 
+      # Load the driver built from this commit through coreaudiod, the way a
+      # user's install does, and check the devices it publishes.
+      - name: Build Seiren FX driver
+        run: scripts/build-driver.sh
+
+      - name: Install Seiren FX driver
+        run: sudo scripts/install-driver.sh
+
+      - name: Wait for coreaudiod to list Seiren FX
+        run: |
+          until system_profiler SPAudioDataType | grep -q 'Seiren FX'; do
+            if (( SECONDS >= 30 )); then
+              echo "coreaudiod did not list Seiren FX within 30 s"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "coreaudiod listed Seiren FX after ${SECONDS} s"
+
+      - name: Check Seiren FX devices
+        run: swift run seiren-probe driver-check
+
   intel:
     name: Build, test & launch (Intel)
     # GitHub's Intel Mac runner: the tests, RNNoise's SSE2 path included, run
