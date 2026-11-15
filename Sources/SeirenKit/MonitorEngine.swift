@@ -1422,12 +1422,7 @@ public final class MonitorEngine {
 
     nonisolated static func startRetryDelay(result: State, consecutiveFailures: Int) -> TimeInterval? {
         guard case .failed = result else { return nil }
-        switch consecutiveFailures {
-        case ...1: return 5
-        case 2: return 10
-        case 3: return 20
-        default: return 60
-        }
+        return StartRetryBackoff.delay(consecutiveFailures: consecutiveFailures)
     }
 
     nonisolated static func shouldRetryStart(sourceID: AudioObjectID, fxDeviceID: AudioObjectID?,
