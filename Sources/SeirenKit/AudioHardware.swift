@@ -70,6 +70,9 @@ package protocol AudioHardware: AnyObject {
     @discardableResult
     func stopIOProc(_ proc: AudioDeviceIOProcID, on device: AudioObjectID) -> OSStatus
     func destroyIOProc(_ proc: AudioDeviceIOProcID, on device: AudioObjectID)
+    /// How many times the route or direct-monitor IOProc has run since the
+    /// route last started. The engine reads it to tell a stalled route.
+    var routeCallbackCount: Int { get }
 
     // MARK: Property listeners
 
@@ -178,6 +181,8 @@ package final class CoreAudioHardware: AudioHardware {
     package func destroyIOProc(_ proc: AudioDeviceIOProcID, on device: AudioObjectID) {
         AudioDeviceDestroyIOProcID(device, proc)
     }
+
+    package var routeCallbackCount: Int { Int(gDiagCallbacks) }
 
     // MARK: Property listeners
 

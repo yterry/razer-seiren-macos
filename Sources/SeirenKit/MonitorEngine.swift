@@ -53,8 +53,10 @@ nonisolated(unsafe) var gMonitorEnabled = true
 
 // Route diagnostics: plain stores from the RT procs (single writer), read on
 // the main thread through `MonitorEngine.routeDiagnostics`. A torn read is
-// harmless - these feed a probe printout and bug reports, never control flow.
-nonisolated(unsafe) private var gDiagCallbacks: Int64 = 0
+// harmless - these feed a probe printout and bug reports. The callback count
+// also feeds the stall check through `AudioHardware.routeCallbackCount`, which
+// only compares it with the previous read.
+nonisolated(unsafe) var gDiagCallbacks: Int64 = 0
 nonisolated(unsafe) private var gDiagInputBuffers: Int32 = 0
 nonisolated(unsafe) private var gDiagOutputBuffers: Int32 = 0
 nonisolated(unsafe) private var gDiagInputPeak: Float = 0
@@ -261,6 +263,8 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
 /// its backoff expires (`startRetryDelay`), so it recovers with no hardware event.
 /// A Seiren FX start that fails while direct monitoring comes up in its place
 /// sets `fxRouteFailure` and is retried with the same backoff.
+/// A running route whose IOProc has not been called for 6 s is torn down
+/// and counts as a failed start with `kAudioHardwareNotRunningError`.
 ///
 /// Threading: this is a `@MainActor` type. All public API and Core Audio device
 /// management runs on the main thread. The only RT-thread code is the
@@ -435,6 +439,10 @@ public final class MonitorEngine {
         didSet { if isStandbyRunning != oldValue { notify() } }
     }
 
+    /// Routes torn down because their IOProc stopped being called, over this
+    /// engine's lifetime. For bug reports only.
+    public private(set) var routeStalls = 0
+
     /// Bundle IDs of the apps the last check found recording from a trigger
     /// device, which is what Auto decides on. For bug reports only.
     public private(set) var recordingBundleIDs: [String] = []
@@ -520,6 +528,13 @@ public final class MonitorEngine {
     private var retryTimer: (any EngineTimer)?
     private var retryGeneration = 0
     var isRetryScheduled: Bool { retryTimer != nil }
+    private var stallTimer: (any EngineTimer)?
+    private var stallLastCount = 0
+    private var stallUnchangedChecks = 0
+    /// The failure the last stall recorded. A start that works clears
+    /// `startFailure`, so this carries the count of consecutive stalls across
+    /// the restarts in between. Cleared once a route's callbacks are seen.
+    private var stallFailure: StartFailure?
     private var recorderAbsentSince: TimeInterval?
     private var routeWasRecorderDriven = false
     private var lastRecorderPresence: Bool?
@@ -1011,6 +1026,7 @@ public final class MonitorEngine {
         state = .running
         logRouteStart(aggregateMS: route.aggregateMS, startTime: route.startTime, startMS: route.startMS)
         installSampleRateListener(on: route.aggregate)
+        startStallCheck()
     }
 
     /// All sources use the aggregate for FX. Only a headphone-equipped Seiren
@@ -1072,6 +1088,7 @@ public final class MonitorEngine {
         state = .running
         logRouteStart(aggregateMS: nil, startTime: startTime, startMS: startMS)
         installSampleRateListener(on: source)
+        startStallCheck()
         return fxFailure
     }
 
@@ -1133,6 +1150,7 @@ public final class MonitorEngine {
 
     private func teardownProc(reason: String) {
         stopRetryTimer()
+        stopStallCheck()
         startupLogTimer?.cancel()
         startupLogTimer = nil
         routeStartedAt = nil
@@ -1307,6 +1325,53 @@ public final class MonitorEngine {
         retryTimer = nil
         // Also invalidate callbacks that have already hopped to the main actor.
         retryGeneration += 1
+    }
+
+    // MARK: - Stalled-route check
+
+    private static let stallCheckInterval: TimeInterval = 2
+    /// Three unchanged checks rather than two leave room for a device that
+    /// takes a few seconds to resume after wake.
+    private static let stallCheckLimit = 3
+
+    /// Called whenever an IOProc becomes the engine's route.
+    private func startStallCheck() {
+        stopStallCheck()
+        stallLastCount = hardware.routeCallbackCount
+        stallTimer = clock.schedule(after: Self.stallCheckInterval, repeats: true) { [weak self] in
+            self?.checkForStall()
+        }
+    }
+
+    private func stopStallCheck() {
+        stallTimer?.cancel()
+        stallTimer = nil
+        stallUnchangedChecks = 0
+    }
+
+    /// A device can stop calling the IOProc while it stays listed, as USB
+    /// devices and aggregates do across sleep, wake and audio service
+    /// restarts. A stall is handled as a failed start, so the start backoff
+    /// and retry apply.
+    private func checkForStall() {
+        guard let sourceID = procSourceID else { return }
+        let count = hardware.routeCallbackCount
+        guard count == stallLastCount else {
+            stallLastCount = count
+            stallUnchangedChecks = 0
+            stallFailure = nil
+            return
+        }
+        stallUnchangedChecks += 1
+        guard stallUnchangedChecks >= Self.stallCheckLimit else { return }
+        let seconds = Int(Double(stallUnchangedChecks) * Self.stallCheckInterval)
+        routeStalls += 1
+        EventLog.shared.log(category: .route, message: "route stalled: no callbacks for \(seconds) s")
+        let fxDeviceID = procFXDeviceID
+        teardownProc(reason: "stalled")
+        startFailure = stallFailure
+        recordStartResult(.failed(kAudioHardwareNotRunningError), sourceID: sourceID, fxDeviceID: fxDeviceID)
+        stallFailure = startFailure
     }
 
     // MARK: - Auto-mode poll timer

@@ -55,6 +55,10 @@ final class FakeAudioHardware: AudioHardware {
     var ownInputs: [AudioObjectID]?
     /// Results for the next IOProc starts, in order. Once it is empty, starts succeed.
     var startResults: [OSStatus] = []
+    /// While true, `routeCallbackCount` stays put, as for a route the HAL
+    /// has stopped calling.
+    var routeCallbacksFrozen = false
+    private var callbackCount = 0
 
     private(set) var calls: [Call] = []
     /// IOProcs created and not yet destroyed.
@@ -252,6 +256,12 @@ final class FakeAudioHardware: AudioHardware {
         runningIOProcs.remove(destroyed)
         ioProcs.remove(destroyed)
         calls.append(.destroyIOProc(destroyed))
+    }
+
+    /// Advances on each read, like a route that keeps cycling, unless frozen.
+    var routeCallbackCount: Int {
+        if !routeCallbacksFrozen { callbackCount += 1 }
+        return callbackCount
     }
 
     // MARK: Property listeners

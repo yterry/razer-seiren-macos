@@ -12,7 +12,7 @@ final class DiagnosticsReportTests: XCTestCase {
     private func snapshot(devices: [DiagnosticsSnapshot.Device] = [], history: [String] = [],
                           activeSource: MonitorEngine.InputDevice? = nil,
                           inputPreference: MonitorEngine.InputPreference = .automatic,
-                          fxRouteFailure: Int32? = nil,
+                          fxRouteFailure: Int32? = nil, stalls: Int = 0,
                           engineState: MonitorEngine.State = .running,
                           mixerState: MixerEngine.State = .off) -> DiagnosticsSnapshot {
         DiagnosticsSnapshot(
@@ -23,7 +23,7 @@ final class DiagnosticsReportTests: XCTestCase {
                           fxRouteFailure: fxRouteFailure, standbyRunning: false,
                           route: .init(callbacks: 1200, inputBuffers: 2, outputBuffers: 3, monitorBuffers: 1,
                                        inputPeak: 0.5, sampleRate: 48000),
-                          recordingBundleIDs: ["us.zoom.xos"]),
+                          stalls: stalls, recordingBundleIDs: ["us.zoom.xos"]),
             devices: devices,
             mixer: .init(enabled: true, availability: .idle, state: mixerState, channelCount: 3,
                          diagnostics: .init(callbacks: 10, inputBuffers: 2, outputBuffers: 1,
@@ -55,6 +55,12 @@ final class DiagnosticsReportTests: XCTestCase {
 
         let named = DiagnosticsReport.render(snapshot(fxRouteFailure: kAudioHardwareBadDeviceError))
         XCTAssertTrue(named.contains("  Seiren FX route failure: Core Audio error '!dev' (560227702)\n"))
+    }
+
+    func testEngineSectionCountsRouteStallsAfterTheRouteLine() {
+        let report = DiagnosticsReport.render(snapshot(stalls: 2))
+        XCTAssertTrue(report.contains("mic peak -6.0 dBFS\n  Stalls: 2\n\nDevices\n"), report)
+        XCTAssertTrue(DiagnosticsReport.render(snapshot()).contains("\n  Stalls: 0\n"))
     }
 
     func testStateLinesShowAFailureCodeAsFourCharactersAndANumber() {
