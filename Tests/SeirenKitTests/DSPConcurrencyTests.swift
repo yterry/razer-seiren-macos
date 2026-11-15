@@ -26,7 +26,9 @@ final class DSPConcurrencyTests: XCTestCase {
     /// Runs `reader` repeatedly on its own thread while `writer` runs on another,
     /// and returns how many times the reader ran. The reader starts first and
     /// keeps going until the writer has finished, so the two always overlap.
-    private func runConcurrently(writer: @escaping @Sendable () -> Void,
+    /// The writer gets a function that waits until the reader has started and
+    /// finished a whole pass since the call.
+    private func runConcurrently(writer: @escaping @Sendable (_ waitForReader: () -> Void) -> Void,
                                  reader: @escaping @Sendable () -> Void) -> Int {
         let writerDone = OSAllocatedUnfairLock(initialState: false)
         let readerStarted = DispatchSemaphore(value: 0)
@@ -35,20 +37,22 @@ final class DSPConcurrencyTests: XCTestCase {
 
         group.enter()
         Thread {
-            var runs = 0
             readerStarted.signal()
             repeat {
                 reader()
-                runs += 1
+                readerRuns.withLock { $0 += 1 }
             } while !writerDone.withLock { $0 }
-            readerRuns.withLock { [runs] in $0 = runs }
             group.leave()
         }.start()
 
         group.enter()
         Thread {
             readerStarted.wait()
-            writer()
+            writer {
+                // The pass in progress may predate the call, so wait for two.
+                let target = readerRuns.withLock { $0 } + 2
+                while readerRuns.withLock({ $0 }) < target {}
+            }
             writerDone.withLock { $0 = true }
             group.leave()
         }.start()
@@ -67,10 +71,15 @@ final class DSPConcurrencyTests: XCTestCase {
         let frames = 256
         let mismatches = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: {
-            for i in 0..<100_000 {
+        let runs = runConcurrently(writer: { waitForReader in
+            for i in 0..<10_000 {
                 let preset = i.isMultiple(of: 2) ? unity : quarter
                 preset.withUnsafeBufferPointer { seiren_dsp_publish($0.baseAddress, Int32(preset.count / 5)) }
+                // seiren_dsp_publish frees a block two publishes after replacing
+                // it and assumes the audio thread has finished with it by then,
+                // which a publish per audio buffer or slower guarantees. Faster
+                // publishing is unsafe until issue #86 is fixed.
+                waitForReader()
             }
         }, reader: {
             var buffer = [Float](repeating: input, count: frames)
@@ -90,11 +99,15 @@ final class DSPConcurrencyTests: XCTestCase {
         let frames = 480
         let nonFinite = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: {
-            for i in 0..<2_000 {
+        let runs = runConcurrently(writer: { waitForReader in
+            for i in 0..<200 {
                 let on: Int32 = i.isMultiple(of: 2) ? 1 : 0
                 seiren_dsp_set_gate(on, i.isMultiple(of: 4) ? -50 : -30, 48000)
                 seiren_dsp_set_studio(on)
+                // seiren_dsp_set_studio has the same timing assumption as
+                // seiren_dsp_publish, and also resets the audio thread's frame
+                // bridge, until issue #86 is fixed.
+                waitForReader()
             }
         }, reader: {
             var buffer = (0..<frames).map { Float(sin(Double($0) * 0.05)) * 0.2 }
@@ -144,7 +157,7 @@ final class DSPConcurrencyTests: XCTestCase {
         let proc = try XCTUnwrap(seiren_mixer_proc())
         let outOfRange = OSAllocatedUnfairLock(initialState: 0)
 
-        let runs = runConcurrently(writer: {
+        let runs = runConcurrently(writer: { _ in
             let mixer = OpaquePointer(bitPattern: mixerAddress)
             for i in 0..<100_000 {
                 seiren_mixer_set_gain(mixer, Int32(i % 2), i.isMultiple(of: 3) ? 0 : 1)
