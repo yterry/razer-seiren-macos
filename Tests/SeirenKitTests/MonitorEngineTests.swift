@@ -3,14 +3,20 @@ import CoreAudio
 import SeirenDSP
 @testable import SeirenKit
 
-/// Hardware-free tests for MonitorEngine's observable contract. They run on CI
-/// and on a developer's Mac with FX installed: a non-matching name plus disabled
-/// fallback makes mode changes resolve to `.noDevice` on either machine.
+/// Tests for MonitorEngine's observable contract and its policy functions.
+/// Engines run on `FakeAudioHardware` with no devices and on `FakeClock`, so
+/// every enabled mode resolves to `.noDevice` whatever the machine has attached.
 @MainActor
 final class MonitorEngineTests: XCTestCase {
+    private let clock = FakeClock()
+
+    private func makeEngine(microphoneAccess: (@MainActor () -> MonitorEngine.MicrophoneAccess)? = nil)
+        -> MonitorEngine {
+        MonitorEngine(microphoneAccess: microphoneAccess, hardware: FakeAudioHardware(clock: clock), clock: clock)
+    }
 
     func testInitialStateIsStoppedAndOff() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         XCTAssertEqual(engine.state, .stopped)
         XCTAssertEqual(engine.mode, .off)
@@ -20,7 +26,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testAlwaysWithNoMatchingDeviceReportsNoDevice() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         XCTAssertEqual(engine.mode, .always)     // desired intent recorded…
@@ -29,7 +35,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testAutoWithNoMatchingDeviceReportsNoDevice() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.auto)
         XCTAssertEqual(engine.mode, .auto)
@@ -37,7 +43,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testOffReturnsToStopped() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.setMode(.off)
@@ -47,8 +53,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testDeniedAccessKeepsChosenModeWithoutADevice() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
-                                   microphoneAccess: { .denied })
+        let engine = makeEngine(microphoneAccess: { .denied })
         defer { engine.shutdown() }
         XCTAssertEqual(engine.state, .stopped)
         for mode in [MonitorEngine.Mode.always, .auto] {
@@ -62,8 +67,7 @@ final class MonitorEngineTests: XCTestCase {
 
     func testRecheckingAccessRecoversWithoutChangingMode() {
         let access = AccessStub(.denied)
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
-                                   microphoneAccess: { access.value })
+        let engine = makeEngine(microphoneAccess: { access.value })
         defer { engine.shutdown() }
         engine.setMode(.always)
         XCTAssertEqual(engine.state, .permissionDenied)
@@ -81,8 +85,7 @@ final class MonitorEngineTests: XCTestCase {
 
     func testDeniedReconciliationClearsPendingRouteRetry() {
         let access = AccessStub(.granted)
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false,
-                                   microphoneAccess: { access.value })
+        let engine = makeEngine(microphoneAccess: { access.value })
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
@@ -95,7 +98,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testLevelClampsToUnitRange() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.level = 2.0
         XCTAssertEqual(engine.level, 1.0, accuracy: 0.0001)
@@ -113,7 +116,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testDelegateFiresOnStateChange() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         let spy = DelegateSpy()
         engine.delegate = spy
@@ -173,7 +176,7 @@ final class MonitorEngineTests: XCTestCase {
     func testHeadphoneOutputDefaultsToTrueUntilAMicIsMatched() {
         // The V3 Pro case is the default, so existing UI (volume slider) is
         // unchanged until an input-only mic is actually matched.
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         XCTAssertTrue(engine.deviceHasHeadphoneOutput)
         engine.setMode(.always)
@@ -317,7 +320,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testRetryTimerIsCancelledWhenModeIsOff() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
@@ -327,7 +330,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testRetryTimerIsCancelledOnShutdown() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
         XCTAssertTrue(engine.isRetryScheduled)
@@ -339,7 +342,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testRetryTimerIsCancelledOnOtherTeardown() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
@@ -350,7 +353,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testSuccessfulStartClearsFailureAndRetryTimer() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
@@ -361,7 +364,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testPermissionDenialDoesNotScheduleRetry() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
@@ -371,7 +374,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testRetryNowClearsFailureAndReconciles() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         for result in [MonitorEngine.State.failed(-1), .permissionDenied] {
@@ -386,7 +389,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testModeChangeClearsFailureSoTheNextStartIsNotGated() throws {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         for _ in 1...4 { engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10) }
@@ -413,21 +416,19 @@ final class MonitorEngineTests: XCTestCase {
         XCTAssertEqual(engine.startFailure?.consecutiveFailures, 1)
     }
 
-    func testRetryTimerReconcilesAfterBackoff() async {
-        let started = ProcessInfo.processInfo.systemUptime
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+    func testRetryTimerReconcilesAfterBackoff() {
+        let engine = makeEngine()
         defer { engine.shutdown() }
         engine.setMode(.always)
         engine.recordStartResult(.failed(-1), sourceID: 1, fxDeviceID: 10)
-        let reconciled = expectation(description: "retry reconciles without a hardware event")
-        let spy = DelegateSpy()
-        spy.onChange = { engine in
-            if engine.state == .noDevice { reconciled.fulfill() }
-        }
-        engine.delegate = spy
         XCTAssertTrue(engine.isRetryScheduled)
-        await fulfillment(of: [reconciled], timeout: 10)
-        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - started, 5)
+
+        clock.advance(by: 4.999)
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertEqual(engine.state, .failed(-1))
+
+        // The retry reconciles with no hardware event.
+        clock.advance(by: 0.001)
         XCTAssertFalse(engine.isRetryScheduled)
         XCTAssertEqual(engine.state, .noDevice)
     }
@@ -558,7 +559,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testStandbyHostPermissionAndShutdownWithNoDevice() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         engine.setMode(.auto)
         XCTAssertFalse(engine.isStandbyRunning)
         engine.setStandbyAllowed(false)
@@ -611,7 +612,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testSampleRateChangesRepublishEQAndResetItsHistory() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer {
             engine.setEQEnabled(false)
             engine.configureSampleRate(48000)
@@ -634,7 +635,7 @@ final class MonitorEngineTests: XCTestCase {
     }
 
     func testSampleRateChangesKeepGateAttackAtThreeMilliseconds() {
-        let engine = MonitorEngine(deviceNameMatch: "no-such-device-xyzzy", fallbackEnabled: false)
+        let engine = makeEngine()
         defer {
             engine.setNoiseSuppression(.off)
             engine.configureSampleRate(48000)
@@ -706,10 +707,8 @@ final class MonitorEngineTests: XCTestCase {
 
     private final class DelegateSpy: MonitorEngineDelegate {
         var changeCount = 0
-        var onChange: ((MonitorEngine) -> Void)?
         func monitorEngineDidChange(_ engine: MonitorEngine) {
             changeCount += 1
-            onChange?(engine)
         }
     }
 }

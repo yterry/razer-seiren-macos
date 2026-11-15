@@ -4,6 +4,9 @@ import Foundation
 
 /// In-memory `AudioHardware`, so `MonitorEngine` runs with no audio device.
 /// A test edits `devices`, then fires the listener the HAL would have fired.
+/// Listeners run through `clock`, which stands in for the main queue: an
+/// event runs after the call that caused it returns, in order. Creating or
+/// destroying an aggregate queues a device-list event, as the HAL does.
 @MainActor
 final class FakeAudioHardware: AudioHardware {
     struct Device: Equatable {
@@ -63,9 +66,11 @@ final class FakeAudioHardware: AudioHardware {
     private var listeners: [AudioHardwareListener: (property: AudioHardwareProperty, handler: @MainActor () -> Void)] = [:]
     private var lastListenerID = 0
     private var lastAggregateID: AudioObjectID = 1000
+    private let clock: FakeClock
 
-    init(devices: [Device] = []) {
+    init(devices: [Device] = [], clock: FakeClock) {
         self.devices = devices
+        self.clock = clock
     }
 
     /// The properties that currently have a listener.
@@ -79,8 +84,19 @@ final class FakeAudioHardware: AudioHardware {
     func fireSampleRateChanged(on device: AudioObjectID) { fire(.sampleRate(device)) }
     func fireRunningStateChanged(on device: AudioObjectID) { fire(.isRunningSomewhere(device)) }
 
+    /// Delivers this event and every event queued before it or caused by it.
     private func fire(_ property: AudioHardwareProperty) {
-        for listener in listeners.values where listener.property == property { listener.handler() }
+        queue(property)
+        clock.advance(by: 0)
+    }
+
+    /// The HAL delivers a change through the main queue, to the listeners
+    /// installed when the event runs.
+    private func queue(_ property: AudioHardwareProperty) {
+        _ = clock.schedule(after: 0, repeats: false) { [weak self] in
+            guard let self else { return }
+            for listener in self.listeners.values where listener.property == property { listener.handler() }
+        }
     }
 
     // MARK: Devices
@@ -171,13 +187,18 @@ final class FakeAudioHardware: AudioHardware {
                               sampleRate: subDevices[0].sampleRate, isVirtual: true))
         aggregates.insert(lastAggregateID)
         calls.append(.createAggregate(lastAggregateID, subDeviceUIDs: subDeviceUIDs))
+        queue(.devices)
         return lastAggregateID
     }
 
+    /// An aggregate that is already gone, as after a coreaudiod restart,
+    /// changes no device list and so queues no event.
     func destroyAggregateDevice(_ aggregate: AudioObjectID) {
+        let wasListed = devices.contains { $0.id == aggregate }
         devices.removeAll { $0.id == aggregate }
         aggregates.remove(aggregate)
         calls.append(.destroyAggregate(aggregate))
+        if wasListed { queue(.devices) }
     }
 
     // MARK: IOProcs
@@ -248,7 +269,9 @@ final class FakeAudioHardware: AudioHardware {
     }
 }
 
-/// A clock that only moves when a test advances it.
+/// A clock that only moves when a test advances it. Work scheduled with no
+/// delay runs on the next `advance`, even `advance(by: 0)`, which is how
+/// `FakeAudioHardware` delivers events through the main queue.
 @MainActor
 final class FakeClock: EngineClock {
     private final class FakeTimer: EngineTimer {

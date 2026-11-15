@@ -530,7 +530,9 @@ public final class MonitorEngine {
     private var standbyProcID: AudioDeviceIOProcID?
     private var standbyDeviceID: AudioObjectID?
     private var standbyDeviceUID: String?
-    private static var standbyRejectedUIDs: Set<String> = []
+    /// Seirens this engine saw itself recording during standby; standby never
+    /// runs on them again while the engine lives.
+    private var standbyRejectedUIDs: Set<String> = []
     private var standbyValidationTimer: (any EngineTimer)?
     private var standbyFailures = StandbyFailureFilter()
 
@@ -790,7 +792,7 @@ public final class MonitorEngine {
         if standbyDeviceID != device.id || standbyDeviceUID != device.uid || !hardware.isAlive(device.id) {
             stopStandby(reason: "source changed or device gone")
         }
-        guard !Self.standbyRejectedUIDs.contains(device.uid), hardware.isAlive(device.id) else { return }
+        guard !standbyRejectedUIDs.contains(device.uid), hardware.isAlive(device.id) else { return }
         guard standbyProcID == nil else {
             scheduleStandbyValidation()
             return
@@ -859,9 +861,9 @@ public final class MonitorEngine {
     private func validateStandbyInput() {
         guard procID == nil, let uid = standbyDeviceUID, let device = standbyDeviceID,
               let inputs = hardware.ownInputDeviceIDs(), inputs.contains(device) else { return }
-        Self.standbyRejectedUIDs.insert(uid)
+        standbyRejectedUIDs.insert(uid)
         stopStandby(reason: "this process now records the Seiren (inputs=\(inputs)); " +
-                    "disabled for process lifetime uid=\(private: uid)")
+                    "disabled for this engine's lifetime uid=\(private: uid)")
     }
 
     private func scheduleStandbyValidation() {
