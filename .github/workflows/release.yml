@@ -10,8 +10,16 @@ name: Release
 #   the signed-mode verification.
 #
 # Both leave the zip, its checksum and the release notes as a workflow artifact
-# and write the notes a tag would publish to the job summary. Only the publish
-# job, which runs on tag pushes alone, can write to the repository.
+# and write the notes a tag would publish to the job summary.
+#
+# A release's notes are the install paragraph from the "Write release notes"
+# step followed by the notes GitHub generates: one line per pull request merged
+# since the previous release, taken from its title. A dry run previews those
+# generated notes in the notes-preview job's summary.
+#
+# Only the publish job, which runs on tag pushes alone, writes to the
+# repository. The notes-preview job holds the same permission only because
+# GitHub's notes API requires it; it checks out no code and saves nothing.
 #
 # Signing is opt-in via repository secrets. When MACOS_CERT_P12 (and friends)
 # are present, the build is Developer-ID-signed, notarized, and stapled -
@@ -211,6 +219,38 @@ jobs:
             dist/release-notes.md
           if-no-files-found: error
 
+  # GitHub's API for generating release notes requires contents: write even
+  # though it only returns text, so the call runs here instead of widening the
+  # build job's token. A pull request from a fork gets a read-only token, so
+  # its dry run skips this preview.
+  notes-preview:
+    name: Preview generated release notes
+    needs: build
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # required by the generate-notes API; nothing is saved
+    steps:
+      - name: Write generated notes to the job summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          GENERATED="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${TAG}" -f target_commitish="${GITHUB_SHA}" --jq .body)"
+          {
+            echo "## Generated notes for ${TAG} (dry run, not published)"
+            echo
+            echo "A ${TAG} tag would publish these below the install paragraph."
+            echo
+            printf '%s\n' "${GENERATED}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish release
     needs: build
@@ -225,6 +265,8 @@ jobs:
           name: release
           path: dist
 
+      # --generate-notes appends GitHub's list of merged pull requests below
+      # the install paragraph from --notes-file.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -235,7 +277,8 @@ jobs:
             "dist/Seiren-${VERSION}.zip" \
             "dist/Seiren-${VERSION}.zip.sha256" \
             --title "${GITHUB_REF_NAME}" \
-            --notes-file dist/release-notes.md
+            --notes-file dist/release-notes.md \
+            --generate-notes
 
       # Auto-bump the Homebrew tap so `brew upgrade` sees the new version. This is
       # best-effort: a no-op without a HOMEBREW_TAP_TOKEN secret (a fine-grained
