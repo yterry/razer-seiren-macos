@@ -61,8 +61,8 @@ body:
       label: Crash report (optional)
       description: |
         If the Seiren menu says **Seiren quit unexpectedly last time**, choose **Copy Crash Report** and paste the result here.
+        If GitHub says the issue is too long, save the text as a .txt file and drag the file into this field instead.
         Review the text before posting; it includes your Mac model, your macOS version and file paths that can contain your account name.
-      render: text
     validations:
       required: false
   - type: input

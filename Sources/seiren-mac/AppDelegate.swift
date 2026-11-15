@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        crashReport = Self.unseenCrashReport(in: Self.diagnosticReportsDirectory, settings: settings)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusMenu.delegate = self
         statusItem.menu = statusMenu
@@ -120,7 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
         updateStandbyAllowed()
 
-        crashReport = Self.unseenCrashReport(in: Self.diagnosticReportsDirectory, settings: settings)
         rebuildMenu()
 
         updateChecker.onChange = { [weak self] in self?.rebuildMenu() }
