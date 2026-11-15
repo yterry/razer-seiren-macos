@@ -7,47 +7,30 @@ final class LocalizableStringsTests: XCTestCase {
     private static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-    /// Every key in `Strings.swift` with its English value, read from the source.
-    private func tableEntries() throws -> [String: String] {
-        let source = try String(contentsOf: Self.root.appendingPathComponent("Sources/seiren-mac/Strings.swift"),
-                                encoding: .utf8)
-        let call = try NSRegularExpression(pattern:
-            #"NSLocalizedString\("([^"]+)", bundle: \.main, value: "((?:[^"\\]|\\.)*)", comment: "#)
-        let matches = call.matches(in: source, range: NSRange(source.startIndex..., in: source))
-        // A call written another way would be skipped here and go unchecked.
-        XCTAssertEqual(matches.count, source.components(separatedBy: "NSLocalizedString(").count - 1)
-        var entries: [String: String] = [:]
-        for match in matches {
-            let key = String(source[Range(match.range(at: 1), in: source)!])
-            let value = unescape(String(source[Range(match.range(at: 2), in: source)!]))
-            if let earlier = entries[key] {
-                XCTAssertEqual(earlier, value, "\(key) has two different values in the table")
-            }
-            entries[key] = value
-        }
-        return entries
+    private func strings(at url: URL) throws -> [String: String] {
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String],
+                             "\(url.path) is not a strings table")
     }
 
-    /// The value of a Swift string literal; only the escapes the table uses.
-    private func unescape(_ literal: String) -> String {
-        var result = ""
-        var iterator = literal.makeIterator()
-        while let character = iterator.next() {
-            guard character == "\\" else { result.append(character); continue }
-            switch iterator.next() {
-            case "n": result.append("\n")
-            case "\"": result.append("\"")
-            case "\\": result.append("\\")
-            case let other: XCTFail("unsupported escape \\\(other.map(String.init) ?? "") in Strings.swift")
-            }
-        }
-        return result
+    /// Every key in `Strings.swift` with its English value, as Xcode's genstrings extracts it.
+    private func extractedTable() throws -> [String: String] {
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: output) }
+        let genstrings = Process()
+        genstrings.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        genstrings.arguments = ["genstrings", "-o", output.path,
+                                Self.root.appendingPathComponent("Sources/seiren-mac/Strings.swift").path]
+        try genstrings.run()
+        genstrings.waitUntilExit()
+        XCTAssertEqual(genstrings.terminationStatus, 0, "xcrun genstrings failed")
+        return try strings(at: output.appendingPathComponent("Localizable.strings"))
     }
 
     func testStringsFileHoldsEveryKeyInTheTableWithTheSameValue() throws {
-        let data = try Data(contentsOf: Self.root.appendingPathComponent("Resources/en.lproj/Localizable.strings"))
-        let file = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String])
-        let table = try tableEntries()
+        let file = try strings(at: Self.root.appendingPathComponent("Resources/en.lproj/Localizable.strings"))
+        let table = try extractedTable()
         XCTAssertGreaterThan(table.count, 100)
         for (key, value) in table.sorted(by: { $0.key < $1.key }) {
             XCTAssertEqual(file[key], value, "Localizable.strings: \(key)")
