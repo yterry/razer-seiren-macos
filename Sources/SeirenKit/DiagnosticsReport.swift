@@ -31,19 +31,23 @@ public struct DiagnosticsSnapshot {
         public var inputPreference: MonitorEngine.InputPreference
         public var activeSource: MonitorEngine.InputDevice?
         public var routesThroughFX: Bool
+        /// `MonitorEngine.fxRouteFailure` at the time of the snapshot.
+        public var fxRouteFailure: Int32?
         public var standbyRunning: Bool
         public var route: MonitorEngine.RouteDiagnostics
         public var recordingBundleIDs: [String]
 
         public init(mode: MonitorEngine.Mode, state: MonitorEngine.State,
                     inputPreference: MonitorEngine.InputPreference, activeSource: MonitorEngine.InputDevice?,
-                    routesThroughFX: Bool, standbyRunning: Bool, route: MonitorEngine.RouteDiagnostics,
+                    routesThroughFX: Bool, fxRouteFailure: Int32?, standbyRunning: Bool,
+                    route: MonitorEngine.RouteDiagnostics,
                     recordingBundleIDs: [String]) {
             self.mode = mode
             self.state = state
             self.inputPreference = inputPreference
             self.activeSource = activeSource
             self.routesThroughFX = routesThroughFX
+            self.fxRouteFailure = fxRouteFailure
             self.standbyRunning = standbyRunning
             self.route = route
             self.recordingBundleIDs = recordingBundleIDs
@@ -164,6 +168,7 @@ public enum DiagnosticsReport {
                   "  Input preference: \(preference)",
                   "  Active source: \(source ?? "none")",
                   "  Through Seiren FX: \(yesNo(e.routesThroughFX))",
+                  "  Seiren FX route failure: \(e.fxRouteFailure.map(String.init) ?? "none")",
                   "  Standby running: \(yesNo(e.standbyRunning))",
                   "  Recording apps: \(e.recordingBundleIDs.isEmpty ? "none" : e.recordingBundleIDs.joined(separator: ", "))",
                   "  Route: \(r.callbacks) callbacks, \(r.inputBuffers) in / \(r.outputBuffers) out buffers, " +
