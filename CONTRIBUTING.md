@@ -189,6 +189,15 @@ make test            # SeirenFX driver tests + swift test; must pass
 swift run seiren-mac # smoke-test the menu-bar app
 ```
 
+CI also runs the tests under sanitizers, in a separate job because sanitized builds are slower.
+Run the same checks locally when you change the C code in `Sources/SeirenDSP` or `Driver/SeirenFX`:
+
+```sh
+swift test --sanitize=thread           # data races, e.g. in the handoffs to the audio thread
+swift test --sanitize=address          # use-after-free and out-of-bounds access
+SANITIZE=1 bash scripts/test-driver.sh # driver tests with AddressSanitizer and UndefinedBehaviorSanitizer
+```
+
 Then:
 
 1. Branch, commit focused changes, push.

@@ -36,15 +36,16 @@ static float g_z[SEIREN_DSP_MAX_CHANNELS][SEIREN_DSP_MAX_SECTIONS][2];
 #define SEIREN_DENORMAL_EPS 1.0e-20f
 
 // --- Noise gate --------------------------------------------------------------
-// Params are set off-thread and read on the RT thread. Like gMonitorLevel in the
-// app, these are plain scalars: a torn read during the rare reconfigure costs at
-// most one slightly-off sample, which is inaudible. `enabled` is written last.
-static volatile int   g_gate_enabled = 0;
-static volatile float g_gate_thresh  = 0.00316f;  // linear, ≈ -50 dBFS
-static float g_gate_open_coef  = 0.0f;            // gain smoothing when opening
-static float g_gate_close_coef = 0.0f;            // gain smoothing when closing
-static float g_gate_env_rel    = 0.0f;            // detector envelope release
-static int   g_gate_hold_samps = 0;
+// Params are set off-thread and read on the RT thread as independent relaxed
+// atomics: a buffer that overlaps a reconfigure may mix old and new values,
+// which costs at most one slightly-off buffer and is inaudible. `enabled` is
+// written last with release, so the first enable sees a complete set.
+static _Atomic(int)   g_gate_enabled    = 0;
+static _Atomic(float) g_gate_thresh     = 0.00316f;  // linear, ≈ -50 dBFS
+static _Atomic(float) g_gate_open_coef  = 0.0f;      // gain smoothing when opening
+static _Atomic(float) g_gate_close_coef = 0.0f;      // gain smoothing when closing
+static _Atomic(float) g_gate_env_rel    = 0.0f;      // detector envelope release
+static _Atomic(int)   g_gate_hold_samps = 0;
 // Per-channel state.
 static float g_gate_env[SEIREN_DSP_MAX_CHANNELS]  = {0};
 static float g_gate_gain[SEIREN_DSP_MAX_CHANNELS] = {0};
@@ -325,27 +326,27 @@ void seiren_dsp_studio_process(float *x, int frames, int rateIs96k)
 void seiren_dsp_set_gate(int enabled, float threshold_db, float sample_rate)
 {
     float fs = (sample_rate > 0.0f) ? sample_rate : 48000.0f;
-    g_gate_thresh = powf(10.0f, threshold_db / 20.0f);
+    atomic_store_explicit(&g_gate_thresh, powf(10.0f, threshold_db / 20.0f), memory_order_relaxed);
     // One-pole smoothing coefficients: gain opens fast (~3 ms), closes gently
     // (~150 ms) to avoid chatter; the detector envelope releases over ~60 ms.
-    g_gate_open_coef  = 1.0f - expf(-1.0f / (fs * 0.003f));
-    g_gate_close_coef = 1.0f - expf(-1.0f / (fs * 0.150f));
-    g_gate_env_rel    = expf(-1.0f / (fs * 0.060f));
-    g_gate_hold_samps = (int)(fs * 0.200f);   // hold open 200 ms between words
-    g_gate_enabled    = enabled;              // publish last
+    atomic_store_explicit(&g_gate_open_coef, 1.0f - expf(-1.0f / (fs * 0.003f)), memory_order_relaxed);
+    atomic_store_explicit(&g_gate_close_coef, 1.0f - expf(-1.0f / (fs * 0.150f)), memory_order_relaxed);
+    atomic_store_explicit(&g_gate_env_rel, expf(-1.0f / (fs * 0.060f)), memory_order_relaxed);
+    atomic_store_explicit(&g_gate_hold_samps, (int)(fs * 0.200f), memory_order_relaxed);
+    atomic_store_explicit(&g_gate_enabled, enabled, memory_order_release); // publish last
 }
 
 void seiren_dsp_gate(float *x, int frames, int channels)
 {
-    if (!g_gate_enabled || x == NULL || frames <= 0) return;
+    if (!atomic_load_explicit(&g_gate_enabled, memory_order_acquire) || x == NULL || frames <= 0) return;
     if (channels > SEIREN_DSP_MAX_CHANNELS) channels = SEIREN_DSP_MAX_CHANNELS;
     if (channels <= 0) return;
 
-    const float thresh   = g_gate_thresh;
-    const float openCoef = g_gate_open_coef;
-    const float closeCoef = g_gate_close_coef;
-    const float envRel   = g_gate_env_rel;
-    const int   holdN    = g_gate_hold_samps;
+    const float thresh    = atomic_load_explicit(&g_gate_thresh, memory_order_relaxed);
+    const float openCoef  = atomic_load_explicit(&g_gate_open_coef, memory_order_relaxed);
+    const float closeCoef = atomic_load_explicit(&g_gate_close_coef, memory_order_relaxed);
+    const float envRel    = atomic_load_explicit(&g_gate_env_rel, memory_order_relaxed);
+    const int   holdN     = atomic_load_explicit(&g_gate_hold_samps, memory_order_relaxed);
 
     for (int f = 0; f < frames; f++) {
         for (int c = 0; c < channels; c++) {
