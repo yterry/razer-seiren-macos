@@ -22,9 +22,13 @@ final class LocalizableStringsTests: XCTestCase {
         genstrings.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         genstrings.arguments = ["genstrings", "-o", output.path,
                                 Self.root.appendingPathComponent("Sources/seiren-mac/Strings.swift").path]
+        let standardError = Pipe()
+        genstrings.standardError = standardError
         try genstrings.run()
+        let warnings = String(decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         genstrings.waitUntilExit()
-        XCTAssertEqual(genstrings.terminationStatus, 0, "xcrun genstrings failed")
+        XCTAssertEqual(genstrings.terminationStatus, 0, "xcrun genstrings failed: \(warnings)")
+        XCTAssertEqual(warnings, "", "xcrun genstrings warned about Strings.swift")
         return try strings(at: output.appendingPathComponent("Localizable.strings"))
     }
 
