@@ -36,6 +36,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertNil(settings.lightingState)
         XCTAssertTrue(settings.autoStandbyEnabled)
         XCTAssertTrue(settings.updateCheckEnabled)
+        XCTAssertNil(settings.crashReportSeenAt)
         XCTAssertEqual(defaults.integer(forKey: "schemaVersion"), Settings.currentSchema)
     }
 
@@ -175,6 +176,14 @@ final class SettingsTests: XCTestCase {
 
         defaults.removeObject(forKey: "updates.checkEnabled")
         XCTAssertTrue(Settings(defaults).updateCheckEnabled)
+    }
+
+    func testCrashReportSeenAtRoundTrips() throws {
+        let defaults = try makeDefaults()
+        let seen = Date(timeIntervalSince1970: 1_800_000_000)
+
+        Settings(defaults).crashReportSeenAt = seen
+        XCTAssertEqual(Settings(defaults).crashReportSeenAt, seen)
     }
 
     func testModeRoundTrips() throws {

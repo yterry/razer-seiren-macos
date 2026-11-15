@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var screensAsleep = false
     private var systemAsleep = false
     private var sessionInactive = false
+    /// The report macOS wrote for a crash the user has not dismissed yet.
+    private var crashReport: URL?
 
     private struct MixerMenuState: Equatable {
         var enabled: Bool
@@ -75,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        crashReport = Self.unseenCrashReport(in: Self.diagnosticReportsDirectory, settings: settings)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusMenu.delegate = self
         statusItem.menu = statusMenu
@@ -244,6 +247,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func populateStatusMenu() {
         let menu = statusMenu
         menu.removeAllItems()
+
+        // 0. The app crashed last time: offer the report macOS wrote.
+        if crashReport != nil {
+            menu.addItem(disabledItem("Seiren quit unexpectedly last time"))
+            for (title, action) in [("Copy Crash Report", #selector(copyCrashReport)),
+                                    ("Report on GitHub…", #selector(reportCrashOnGitHub)),
+                                    ("Dismiss", #selector(dismissCrashReport))] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
 
         // 1. Device / state line (disabled, informational).
         menu.addItem(disabledItem(statusLine()))
@@ -1207,6 +1223,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         let report = DiagnosticsReport.render(diagnosticsSnapshot())
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(report, forType: .string)
+    }
+
+    // MARK: - Crash report
+
+    static let diagnosticReportsDirectory = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+    static let bugReportURL = URL(string:
+        "https://github.com/yterry/razer-seiren-macos/issues/new?template=bug.yml")!
+
+    /// This app's newest crash report in `directory` written after the stored
+    /// `crashReportSeenAt`, or nil. With no stored time (a new install, or the
+    /// first launch of a version with this check) it stores `now` and offers
+    /// nothing, so reports from before this version ran are never offered.
+    /// A missing or unreadable directory logs one entry and returns nil.
+    static func unseenCrashReport(in directory: URL, settings: Settings, now: Date = Date()) -> URL? {
+        guard let seenAt = settings.crashReportSeenAt else {
+            settings.crashReportSeenAt = now
+            return nil
+        }
+        do {
+            return try CrashReportFinder.newestReport(in: directory, processName: "seiren-mac",
+                                                      after: seenAt)
+        } catch {
+            // The error text names the folder, whose path has the account name.
+            let error = error as NSError
+            EventLog.shared.log(category: .system,
+                                message: "can't read crash reports: \(error.domain) \(error.code)")
+            return nil
+        }
+    }
+
+    @objc private func copyCrashReport() {
+        guard let url = crashReport else { return }
+        do {
+            let report = try String(contentsOf: url, encoding: .utf8)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+            settings.crashReportSeenAt = Date()
+        } catch {
+            presentError("Couldn't read the crash report: \(error.localizedDescription)")
+        }
+    }
+
+    @objc private func reportCrashOnGitHub() {
+        settings.crashReportSeenAt = Date()
+        NSWorkspace.shared.open(Self.bugReportURL)
+    }
+
+    @objc private func dismissCrashReport() {
+        settings.crashReportSeenAt = Date()
+        crashReport = nil
+        rebuildMenu()
     }
 
     private func diagnosticsSnapshot() -> DiagnosticsSnapshot {

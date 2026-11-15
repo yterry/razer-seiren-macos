@@ -26,6 +26,7 @@ public final class Settings {
         static let autoStandby   = "auto.standbyEnabled" // Bool, set with `defaults write`
         static let firstRunDone  = "firstRun.done"      // Bool
         static let updateCheck   = "updates.checkEnabled" // Bool, set with `defaults write`
+        static let crashSeenAt   = "crashReport.seenAt" // Date
     }
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
@@ -83,6 +84,16 @@ public final class Settings {
     public var firstRunDone: Bool {
         get { defaults.bool(forKey: Key.firstRunDone) }
         set { defaults.set(newValue, forKey: Key.firstRunDone) }
+    }
+
+    // MARK: Crash reports
+
+    /// When the user last acted on the "quit unexpectedly" menu section. Crash
+    /// reports from before it are not offered again. The app stores the launch
+    /// time when this is nil, so reports from before that launch are never offered.
+    public var crashReportSeenAt: Date? {
+        get { defaults.object(forKey: Key.crashSeenAt) as? Date }
+        set { defaults.set(newValue, forKey: Key.crashSeenAt) }
     }
 
     // MARK: Monitoring
