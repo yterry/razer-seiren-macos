@@ -128,6 +128,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         } else {
             Self.requestMicrophoneAccessThen { [weak self] in self?.engine.setMode(restored) }
         }
+
+        // A new install starts in Off with a dimmed icon and no window, so say
+        // where the app is and offer the recommended mode, once.
+        Self.welcomeOnFirstLaunch(settings: settings, ask: {
+            NSApp.activate(ignoringOtherApps: true)
+            return Self.welcomeAlert().runModal()
+        }, turnOnAuto: { applyMode(.auto) })
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1201,6 +1208,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - First launch
+
+    /// The one dialog a new install shows. Escape answers "Not now".
+    static func welcomeAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Seiren runs in the menu bar"
+        alert.informativeText = "Seiren has no window and no Dock icon. Click the microphone " +
+            "icon in the menu bar to change its settings.\n\n" +
+            "Auto is the recommended mode. It runs headphone monitoring and voice processing " +
+            "only while another app is using the microphone, such as during a call. " +
+            "macOS asks for microphone access the first time a mode is turned on."
+        alert.addButton(withTitle: "Turn on Auto")
+        alert.addButton(withTitle: "Not now").keyEquivalent = "\u{1b}"
+        return alert
+    }
+
+    /// Asks on a new install's first launch and records that it did, so no
+    /// later launch asks again. Only the first button turns Auto on.
+    static func welcomeOnFirstLaunch(settings: Settings, ask: () -> NSApplication.ModalResponse,
+                                     turnOnAuto: () -> Void) {
+        guard !settings.firstRunDone else { return }
+        let answer = ask()
+        settings.firstRunDone = true
+        if answer == .alertFirstButtonReturn { turnOnAuto() }
     }
 
     // MARK: - Microphone permission

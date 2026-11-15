@@ -102,10 +102,13 @@ Released zips ship with a **SHA-256 checksum** so you can verify the download.
 
 1. Open **Seiren** from `/Applications` (or run `.build/release/seiren-mac` from a [source build](#building-from-source)).
    A 🎙 icon appears in the menu bar; that menu is the whole app, with no Dock icon.
+   On the very first launch a dialog says so and offers **Turn on Auto**, the recommended [mode](#monitoring-modes).
+   **Not now** leaves monitoring off, and the dialog does not come back.
 2. Plug headphones into the **Seiren's** headphone jack (not the Mac's).
    Monitoring routes mic → *Seiren's* output.
    (V3 Mini: no jack - skip this; your route is Seiren FX, see [V3 Mini](#v3-mini).)
-3. Click the 🎙 menu and pick a **mode** (see [Monitoring modes](#monitoring-modes)).
+3. If you chose **Not now**, click the 🎙 menu and pick a **mode** (see [Monitoring modes](#monitoring-modes)).
+   The same menu changes the mode at any time.
 4. The **first** time, macOS asks for **Microphone** permission - click **Allow** (the app reads the mic to monitor, EQ, and denoise your voice).
    If you miss the prompt, the menu says **Microphone access is required** and offers **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone** for you.
 5. Speak.
