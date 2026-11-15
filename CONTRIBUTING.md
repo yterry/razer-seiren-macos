@@ -145,6 +145,7 @@ Sources/
   seiren-mac/        the menu-bar agent (main.swift + AppDelegate): 🎙 menu —
                      modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
                      Stream Mixer ▸, Seiren FX install
+                     AppDelegate+{Voice,Mixer,Lighting,Driver,LaunchAtLogin,Diagnostics,FirstLaunch}.swift, MixerChannelView.swift, PercentSlider.swift
   seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
 Driver/SeirenFX/     the loopback virtual audio devices, Seiren FX and Seiren
                      Stream Mix (AudioServerPlugIn)
