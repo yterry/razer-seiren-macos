@@ -212,6 +212,19 @@ In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
    If it did, bump both `CFBundleShortVersionString` and `CFBundleVersion` in `Driver/SeirenFX/Info.plist` to the same new version.
    The app offers to update Seiren FX only when the bundled `CFBundleShortVersionString` is higher than the installed one, so a driver change without a bump never reaches users who already have Seiren FX.
 3. If the driver changed, run the on-Mac driver checklist below and record the result of each check in the pull request that bumps the driver version.
+4. Run the release workflow as a signed dry run on the commit you will tag.
+   It runs every step a tag runs up to the release, including signing, notarization and the signed-mode checks in `scripts/verify-release.sh`, and publishes nothing.
+   ```sh
+   gh workflow run release.yml -f version=X.Y.Z -f sign=true
+   gh run watch                              # pick the Release run
+   gh run download <run-id> -n release -D /tmp/seiren-dry-run
+   ```
+   The run must pass.
+   Its summary shows the release notes a `vX.Y.Z` tag would publish.
+   They must say "Signed with a Developer ID and notarized by Apple"; the unsigned notes mean the signing secrets were not picked up.
+   The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment` and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
+   Quit any installed `Seiren.app`, unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`, and open `/tmp/seiren-dry-run/Seiren.app`.
+   It must open with no Gatekeeper warning.
 
 The app's own version comes from the tag: `scripts/package.sh` writes it into `Seiren.app`, so there is no app version to bump by hand.
 
