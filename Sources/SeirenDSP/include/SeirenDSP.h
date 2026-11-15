@@ -10,9 +10,10 @@
 //  publishes them here; the IOProc calls seiren_dsp_process().
 //
 //  The coefficient handoff is lock-free: a new immutable coefficient block is
-//  published with a C11 atomic store-release; the RT thread loads it with
-//  acquire ordering. The old block is freed one publish later ("deferred free")
-//  so the RT thread can never dereference freed memory. (We target macOS 13, so
+//  published with a C11 atomic exchange. The RT thread names the block it is
+//  reading in a second atomic, and a replaced block is freed only once the RT
+//  thread no longer names it, so the RT thread can never dereference freed
+//  memory, however fast blocks are published. (We target macOS 13, so
 //  Swift's Synchronization.Atomic — macOS 15+ — is unavailable; C11 <stdatomic.h>
 //  is the portable choice.)
 //
@@ -42,9 +43,10 @@ extern "C" {
 ///                  DISABLE the EQ — the RT thread will then pass audio through
 ///                  untouched.
 ///
-/// Thread-safety: safe to call concurrently with seiren_dsp_process(). Internally
-/// allocates a new block, atomically swaps it in (release ordering), and frees
-/// the block retired by the *previous* publish (deferred free).
+/// Thread-safety: safe to call concurrently with seiren_dsp_process() on one
+/// other thread. Internally allocates a new block, atomically swaps it in, and
+/// frees each replaced block the RT thread is not reading at that moment; a
+/// block still being read is freed by a later publish.
 void seiren_dsp_publish(const float *coeffs, int nSections);
 
 /// Apply the currently-published EQ to an interleaved float buffer, in place.
@@ -105,8 +107,10 @@ void seiren_dsp_downsample2(const float *in, float *out, int outFrames);
 void seiren_dsp_upsample2(const float *in, float *out, int inFrames);
 
 /// Enable/disable Studio (RNNoise) NS. Call OFF the real-time thread — it
-/// allocates/frees the RNNoise state. Publishes the state atomically; the RT
-/// processor is a no-op until a state is published, and again once disabled.
+/// allocates/frees the RNNoise state. Publishes the state atomically, the same
+/// way as seiren_dsp_publish; the RT processor is a no-op until a state is
+/// published, and again once disabled. The RT processor clears its frame
+/// bridge when it first runs a newly published state.
 void seiren_dsp_set_studio(int enabled);
 
 /// Apply Studio NS in place to a mono buffer. REAL-TIME SAFE; a no-op when

@@ -98,3 +98,26 @@ jobs:
           fi
           kill "$pid"
           echo "Seiren was still running after 10 s on $(uname -m)"
+
+  sanitizers:
+    name: Sanitizers (macOS)
+    # The tests again under ThreadSanitizer and AddressSanitizer, to check the
+    # lock-free handoffs to the audio thread. Sanitized builds take about twice
+    # as long, so they run in their own job.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Driver tests (AddressSanitizer, UndefinedBehaviorSanitizer)
+        run: SANITIZE=1 bash scripts/test-driver.sh
+
+      - name: Test (ThreadSanitizer)
+        run: swift test --sanitize=thread
+
+      - name: Test (AddressSanitizer)
+        run: swift test --sanitize=address
