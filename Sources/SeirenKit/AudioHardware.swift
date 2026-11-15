@@ -1,10 +1,12 @@
 import CoreAudio
 import Foundation
 
-/// A property `MonitorEngine` listens to for changes.
+/// A property `MonitorEngine` or `MixerEngine` listens to for changes.
 package enum AudioHardwareProperty: Hashable, Sendable {
     /// The system device list: plug, unplug, and driver restarts.
     case devices
+    /// The system process list: apps starting, stopping, or starting audio.
+    case processObjects
     case defaultInput
     case defaultOutput
     /// The nominal sample rate of one device.
@@ -186,6 +188,8 @@ package final class CoreAudioHardware: AudioHardware {
         switch property {
         case .devices:
             (object, selector) = (AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
+        case .processObjects:
+            (object, selector) = (AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList)
         case .defaultInput:
             (object, selector) = (AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice)
         case .defaultOutput:
