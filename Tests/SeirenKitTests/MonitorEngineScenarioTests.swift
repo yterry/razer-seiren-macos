@@ -396,10 +396,93 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    // MARK: Start failures with microphone access reported
+
+    func testDenialCodeWithAccessGrantedIsRetriedOnAJacklessSeiren() throws {
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareIllegalOperationError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareIllegalOperationError))
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertTrue(hardware.ioProcs.isEmpty)
+
+        clock.advance(by: 5)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .route, device: aggregate)])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDenialCodeOnTheFXRouteWithAccessGrantedFallsBackToDirectMonitoring() {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareIllegalOperationError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRoutingThroughFX)
+        XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .monitor, device: seiren.id)])
+        XCTAssertTrue(hardware.aggregates.isEmpty)
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDenialCodeWithoutReportedAccessIsADenialAndIsNotRetried() {
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareIllegalOperationError]
+        let engine = makeEngine(on: hardware)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .permissionDenied)
+        XCTAssertFalse(engine.isRetryScheduled)
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDenialCodeWithAccessUndeterminedIsADenial() {
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        hardware.startResults = [kAudioHardwareIllegalOperationError]
+        let engine = makeEngine(on: hardware, microphoneAccess: { .undetermined })
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .permissionDenied)
+        XCTAssertFalse(engine.isRetryScheduled)
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDenialCodeOnSampleRateRestartWithAccessGrantedIsRetried() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let index = try XCTUnwrap(hardware.devices.firstIndex { $0.id == aggregate })
+
+        hardware.startResults = [kAudioHardwareIllegalOperationError]
+        hardware.devices[index].sampleRate = 96000
+        hardware.fireSampleRateChanged(on: aggregate)
+
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareIllegalOperationError))
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        clock.advance(by: 5)
+        XCTAssertEqual(engine.state, .running)
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     // MARK: Helpers
 
-    private func makeEngine(on hardware: FakeAudioHardware) -> MonitorEngine {
-        MonitorEngine(hardware: hardware, clock: clock)
+    private func makeEngine(on hardware: FakeAudioHardware,
+                            microphoneAccess: (@MainActor () -> MonitorEngine.MicrophoneAccess)? = nil)
+        -> MonitorEngine {
+        MonitorEngine(microphoneAccess: microphoneAccess, hardware: hardware, clock: clock)
     }
 
     private func input(_ device: Device, isSeiren: Bool) -> InputDevice {

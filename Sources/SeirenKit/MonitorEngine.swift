@@ -485,7 +485,7 @@ public final class MonitorEngine {
     private let preferredBufferFrames: UInt32
     private let autoPollInterval: TimeInterval
     private let fallbackEnabled: Bool
-    private let microphoneAccess: @MainActor () -> MicrophoneAccess
+    private let microphoneAccess: (@MainActor () -> MicrophoneAccess)?
     private let hardware: any AudioHardware
     private let clock: any EngineClock
     private var lastMicrophoneAccess: MicrophoneAccess?
@@ -543,13 +543,17 @@ public final class MonitorEngine {
     ///     running-state listener for prompt call detection.
     ///   - fallbackEnabled: disable non-Seiren sources for deterministic tests
     ///     and diagnostics that must target only a name-matched microphone.
-    ///   - microphoneAccess: the host's current microphone authorization.
-    ///     Defaults to granted for headless hosts that manage access themselves.
+    ///   - microphoneAccess: the host's current microphone authorization, or
+    ///     nil when the host does not report it (headless hosts such as
+    ///     `seiren-probe`). Nil is treated as granted when deciding whether to
+    ///     start, and a failed start with a status code that a denial typically
+    ///     returns is then reported as `.permissionDenied`. A host that reports
+    ///     `.granted` gets those codes as ordinary `.failed` starts instead.
     public convenience init(deviceNameMatch: String = "seiren",
                             preferredBufferFrames: UInt32 = 128,
                             autoPollInterval: TimeInterval = 1.5,
                             fallbackEnabled: Bool = true,
-                            microphoneAccess: @escaping @MainActor () -> MicrophoneAccess = { .granted }) {
+                            microphoneAccess: (@MainActor () -> MicrophoneAccess)? = nil) {
         self.init(deviceNameMatch: deviceNameMatch, preferredBufferFrames: preferredBufferFrames,
                   autoPollInterval: autoPollInterval, fallbackEnabled: fallbackEnabled,
                   microphoneAccess: microphoneAccess, hardware: CoreAudioHardware(), clock: SystemClock())
@@ -561,7 +565,7 @@ public final class MonitorEngine {
                  preferredBufferFrames: UInt32 = 128,
                  autoPollInterval: TimeInterval = 1.5,
                  fallbackEnabled: Bool = true,
-                 microphoneAccess: @escaping @MainActor () -> MicrophoneAccess = { .granted },
+                 microphoneAccess: (@MainActor () -> MicrophoneAccess)? = nil,
                  hardware: any AudioHardware,
                  clock: any EngineClock) {
         self.deviceNameMatch = deviceNameMatch.lowercased()
@@ -658,7 +662,7 @@ public final class MonitorEngine {
 
     private func reconcile(fromPoll: Bool = false) {
         guard !isShutdown else { return }
-        let access = microphoneAccess()
+        let access = microphoneAccess?() ?? .granted
         let accessRecovered = lastMicrophoneAccess == .denied && access != .denied
         lastMicrophoneAccess = access
         otherInputsSupported = hardware.recordingProcessesSupported
@@ -1096,13 +1100,17 @@ public final class MonitorEngine {
         notify()
     }
 
-    // Fallback for a start that fails while the host's `microphoneAccess` does
-    // not report a denial (the default for headless hosts is granted).
-    // `kAudioHardwareIllegalOperationError` is what an input start typically
-    // returns when Microphone access is denied. Treat the common denial codes
-    // as permission, everything else as a real failure.
+    // A guess for hosts that do not report microphone access (nil) or report
+    // it as undetermined: `kAudioHardwareIllegalOperationError` is what an
+    // input start typically returns when Microphone access is denied, so the
+    // common denial codes count as permission. Core Audio also returns them for
+    // other reasons, such as a device still settling after wake or after a
+    // coreaudiod restart, so when the host reports access as granted they are
+    // ordinary failures: the direct-monitor fallback is tried and the start is
+    // retried.
     private func isProbablyPermissionError(_ status: OSStatus) -> Bool {
-        status == kAudioHardwareIllegalOperationError
+        guard microphoneAccess?() != .granted else { return false }
+        return status == kAudioHardwareIllegalOperationError
             || status == kAudioHardwareUnknownPropertyError
     }
 
