@@ -158,8 +158,8 @@ public final class MixerEngine {
     /// installation/update before the user enables the mixer.
     public var availability: State {
         Self.runPolicy(enabled: true, supportedOS: Self.supportedOS,
-                       hasFX: AudioDevices.fxDevice() != nil,
-                       hasStreamMix: AudioDevices.streamMixOutputDevice() != nil, hasRecorders: false)
+                       hasFX: hardware.fxDevice() != nil,
+                       hasStreamMix: hardware.streamMixOutputDevice() != nil, hasRecorders: false)
     }
 
     public var diagnostics: Diagnostics {
@@ -202,17 +202,16 @@ public final class MixerEngine {
         return now - failure.time >= 5
     }
 
-    private struct Listener {
-        var object: AudioObjectID
-        var selector: AudioObjectPropertySelector
-        var block: AudioObjectPropertyListenerBlock
-    }
-
     private let runWithoutRecorder: Bool
+    private let hardware: any MixerHardware
+    private let clock: any EngineClock
     private var isShutdown = false
-    private var timer: Timer?
-    private var debounce: Timer?
-    private var listeners: [Listener] = []
+    private var timer: (any EngineTimer)?
+    private var debounce: (any EngineTimer)?
+    /// The device list and process list listeners, kept for the engine's life.
+    private var systemListeners: [AudioHardwareListener] = []
+    /// FX's sample rate and Stream Mix's running state, replaced when either device changes.
+    private var deviceListeners: [AudioHardwareListener] = []
     private var fxObserved: AudioObjectID?
     private var mixObserved: AudioObjectID?
     private var snapshot: Snapshot?
@@ -235,8 +234,16 @@ public final class MixerEngine {
 
     /// Package-only escape hatch for the probe, whose own recording is excluded
     /// by the same self/ancestor filter used by Auto mode.
-    package init(runWithoutRecorder: Bool) {
+    package convenience init(runWithoutRecorder: Bool) {
+        self.init(runWithoutRecorder: runWithoutRecorder, hardware: CoreAudioHardware(), clock: SystemClock())
+    }
+
+    /// The same engine on the given hardware and clock. Tests pass fakes; the
+    /// other initializers pass Core Audio and the system clock.
+    package init(runWithoutRecorder: Bool = false, hardware: any MixerHardware, clock: any EngineClock) {
         self.runWithoutRecorder = runWithoutRecorder
+        self.hardware = hardware
+        self.clock = clock
         installSystemListeners()
         reconcile()
     }
@@ -246,14 +253,10 @@ public final class MixerEngine {
         let changed = enabled != isEnabled
         isEnabled = enabled
         if enabled, timer == nil {
-            let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.reconcile() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            self.timer = timer
+            timer = clock.schedule(after: 1.5, repeats: true) { [weak self] in self?.reconcile() }
         } else if !enabled {
-            timer?.invalidate(); timer = nil
-            debounce?.invalidate(); debounce = nil
+            timer?.cancel(); timer = nil
+            debounce?.cancel(); debounce = nil
         }
         reconcile()
         if changed { notify() }
@@ -305,11 +308,12 @@ public final class MixerEngine {
 
     public func shutdown() {
         isShutdown = true
-        timer?.invalidate(); timer = nil
-        debounce?.invalidate(); debounce = nil
+        timer?.cancel(); timer = nil
+        debounce?.cancel(); debounce = nil
         teardown()
-        for listener in listeners { remove(listener) }
-        listeners = []
+        for listener in systemListeners + deviceListeners { hardware.removeListener(listener) }
+        systemListeners = []
+        deviceListeners = []
         isEnabled = false
         state = .off
     }
@@ -323,15 +327,15 @@ public final class MixerEngine {
 
     private func reconcile() {
         guard !isShutdown else { return }
-        let fx = AudioDevices.fxDevice(), mix = AudioDevices.streamMixDevice()
-        let mixOutput = AudioDevices.streamMixOutputDevice()
+        let fx = hardware.fxDevice(), mix = hardware.streamMixDevice()
+        let mixOutput = hardware.streamMixOutputDevice()
         let devicesChanged = fx != fxObserved || mix != mixObserved
         if devicesChanged {
             updateDeviceListeners(fx: fx, mix: mix)
             fxObserved = fx; mixObserved = mix
             notify()
         }
-        let recorders = (mix.map { AudioDevices.recordingProcesses(fromAny: [$0]) ?? [] } ?? []).filter {
+        let recorders = (mix.map { hardware.recordingProcesses(fromAny: [$0]) ?? [] } ?? []).filter {
             !Self.shouldIgnoreRecorder(bundleID: $0.bundleID, appBundleID: Bundle.main.bundleIdentifier)
         }
         let desired = Self.runPolicy(enabled: isEnabled, supportedOS: Self.supportedOS,
@@ -342,7 +346,7 @@ public final class MixerEngine {
             return
         }
         guard #available(macOS 14.2, *) else { return }
-        guard let ownProcess = AudioDevices.ownProcessObject() else {
+        guard let ownProcess = hardware.ownProcessObject() else {
             if state != .failed(kAudioHardwareBadObjectError) {
                 EventLog.shared.log(category: .mixer, message:
                     "start failed: no process object status=\(kAudioHardwareBadObjectError)")
@@ -356,7 +360,7 @@ public final class MixerEngine {
         }
         let channelIDs = Set(appBundleIDs)
         var byApp: [String: Set<AudioObjectID>] = [:]
-        let objects = Set(AudioDevices.processObjects())
+        let objects = Set(hardware.processObjects())
         // Cache ownership for each process and channel list. Changing channels
         // clears this cache because a nested app may now own its own audio.
         owners = owners.filter { objects.contains($0.key) }
@@ -365,9 +369,9 @@ public final class MixerEngine {
             if let cached = owners[object] {
                 owner = cached
             } else {
-                let pid = AudioDevices.processPID(object)
-                owner = Self.owningAppBundleID(bundleID: AudioDevices.processBundleID(object),
-                    executablePath: pid.flatMap { AudioDevices.executablePath($0) },
+                let pid = hardware.processPID(object)
+                owner = Self.owningAppBundleID(bundleID: hardware.processBundleID(object),
+                    executablePath: pid.flatMap { hardware.executablePath($0) },
                     channelBundleIDs: channelIDs)
                 owners.updateValue(owner, forKey: object)
             }
@@ -375,15 +379,15 @@ public final class MixerEngine {
         }
         let recorderObjects = Set(recorders.map(\.objectID))
         let appProcesses = Self.channelProcesses(bundleIDs: appBundleIDs, byApp: byApp, excluding: recorderObjects)
-        let current = Snapshot(fx: fx, mix: mixOutput, rate: AudioDevices.nominalRate(fx), appBundleIDs: appBundleIDs,
+        let current = Snapshot(fx: fx, mix: mixOutput, rate: hardware.nominalRate(fx), appBundleIDs: appBundleIDs,
             apps: appProcesses, recorders: recorderObjects, ownProcess: ownProcess)
         // A coreaudiod restart can hand out the same IDs, so "running with the
         // same inputs" only counts while our aggregate still exists.
-        if current == snapshot, state == .running, let aggregate, AudioDevices.isAlive(aggregate) { return }
+        if current == snapshot, state == .running, let aggregate, hardware.isAlive(aggregate) { return }
         // Creating/destroying our aggregate and taps also fires listeners. Keep
         // the failure across idle/teardown so every entry point obeys backoff.
         guard Self.shouldRetryStart(snapshot: current, failure: startFailure,
-                                    now: ProcessInfo.processInfo.systemUptime) else { return }
+                                    now: clock.uptime) else { return }
         teardown()
         snapshot = current
         let status = start(current)
@@ -397,36 +401,32 @@ public final class MixerEngine {
             teardown(); state = .failed(status)
         }
         startFailure = StartFailure.recording(result: state, snapshot: current,
-                                              now: ProcessInfo.processInfo.systemUptime)
+                                              now: clock.uptime)
     }
 
     @available(macOS 14.2, *)
     private func start(_ current: Snapshot) -> OSStatus {
         var excluded = current.recorders.union([current.ownProcess])
         for processes in current.apps { excluded.formUnion(processes) }
-        var descriptions: [(Int, CATapDescription, Int)] = [
-            (1, CATapDescription(stereoGlobalTapButExcludeProcesses: excluded.sorted()), excluded.count)
+        var descriptions: [(Int, MixerTap.Processes, Int)] = [
+            (1, .allExcept(excluded.sorted()), excluded.count)
         ]
         for (index, processes) in current.apps.enumerated() where !processes.isEmpty {
-            descriptions.append((index + 2, CATapDescription(stereoMixdownOfProcesses:
-                processes.sorted()), processes.count))
+            descriptions.append((index + 2, .only(processes.sorted()), processes.count))
         }
         var tapList: [[String: Any]] = []
         var tapDiagnostics: [Tap] = []
-        for (channel, description, count) in descriptions {
-            description.name = "Seiren Mixer: \(channels[channel].name)"
-            description.isPrivate = true
-            description.muteBehavior = .unmuted
-            var tap: AudioObjectID = 0
-            let status = AudioHardwareCreateProcessTap(description, &tap)
-            guard status == noErr else { return status }
-            tapIDs.append(tap)
-            tapList.append([kAudioSubTapUIDKey as String: description.uuid.uuidString,
+        for (channel, processes, count) in descriptions {
+            let created = hardware.createProcessTap(
+                MixerTap(processes: processes, name: "Seiren Mixer: \(channels[channel].name)"))
+            guard created.status == noErr else { return created.status }
+            tapIDs.append(created.id)
+            tapList.append([kAudioSubTapUIDKey as String: created.uid,
                             kAudioSubTapDriftCompensationKey as String: 1])
             tapDiagnostics.append(Tap(channelName: channels[channel].name, processCount: count))
         }
-        guard let fxUID = AudioDevices.deviceUID(current.fx),
-              let mixUID = AudioDevices.deviceUID(current.mix) else { return kAudioHardwareBadObjectError }
+        guard let fxUID = hardware.deviceUID(current.fx),
+              let mixUID = hardware.deviceUID(current.mix) else { return kAudioHardwareBadObjectError }
         let description: [String: Any] = [
             kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
             kAudioAggregateDeviceNameKey as String: "Seiren Mixer",
@@ -440,18 +440,17 @@ public final class MixerEngine {
             kAudioAggregateDeviceTapListKey as String: tapList,
             kAudioAggregateDeviceTapAutoStartKey as String: 1,
         ]
-        var device: AudioObjectID = 0
-        let created = AudioHardwareCreateAggregateDevice(description as CFDictionary, &device)
+        let (created, device) = hardware.createAggregate(description)
         guard created == noErr else { return created }
         aggregate = device
-        AudioDevices.setBufferFrameSize(device, 256)
+        hardware.setBufferFrameSize(device, 256)
         // FX supplies the clock, and the voice route owns its nominal rate.
         // Never set FX's rate from here. Aggregate drift compensation resamples
         // Stream Mix and taps to this clock, including 44.1/88.2/96 kHz.
-        let fxInputs = AudioDevices.streamCount(current.fx, scope: kAudioObjectPropertyScopeInput)
-        let mixInputs = AudioDevices.streamCount(current.mix, scope: kAudioObjectPropertyScopeInput)
-        let fxOutputs = AudioDevices.streamCount(current.fx, scope: kAudioObjectPropertyScopeOutput)
-        let mixOutputs = AudioDevices.streamCount(current.mix, scope: kAudioObjectPropertyScopeOutput)
+        let fxInputs = hardware.streamCount(current.fx, scope: kAudioObjectPropertyScopeInput)
+        let mixInputs = hardware.streamCount(current.mix, scope: kAudioObjectPropertyScopeInput)
+        let fxOutputs = hardware.streamCount(current.fx, scope: kAudioObjectPropertyScopeOutput)
+        let mixOutputs = hardware.streamCount(current.mix, scope: kAudioObjectPropertyScopeOutput)
         guard fxInputs > 0, mixOutputs > 0,
               fxInputs + mixInputs + descriptions.count <= Int(SEIREN_MIXER_MAX_INPUTS) else {
             return kAudioHardwareUnsupportedOperationError
@@ -464,33 +463,33 @@ public final class MixerEngine {
         }
         map.mixOutput = fxOutputs
         map.silencedOutputs = (0..<(fxOutputs + mixOutputs)).filter { $0 != map.mixOutput }
-        guard let dsp = seiren_mixer_create(AudioDevices.nominalRate(device), Int32(map.mixOutput)) else {
+        guard let dsp = seiren_mixer_create(hardware.nominalRate(device), Int32(map.mixOutput)) else {
             return kAudioHardwareUnspecifiedError
         }
         self.dsp = dsp
         for (input, channel) in map.inputChannels {
             seiren_mixer_map_input(dsp, Int32(input), Int32(channel))
         }
-        lastDiagnostics = Diagnostics(indexMap: map, sampleRate: AudioDevices.nominalRate(device), taps: tapDiagnostics)
+        lastDiagnostics = Diagnostics(indexMap: map, sampleRate: hardware.nominalRate(device), taps: tapDiagnostics)
         publishGains()
-        var proc: AudioDeviceIOProcID?
-        let procStatus = AudioDeviceCreateIOProcID(device, seiren_mixer_proc(), UnsafeMutableRawPointer(dsp), &proc)
+        let (procStatus, proc) = hardware.createIOProc(on: device, seiren_mixer_proc(),
+                                                       clientData: UnsafeMutableRawPointer(dsp))
         guard procStatus == noErr, let proc else { return procStatus == noErr ? kAudioHardwareUnspecifiedError : procStatus }
         self.proc = proc
         // Unused streams must be disabled at the HAL, not merely ignored in
         // the callback: otherwise another Seiren instance sees us recording
         // Stream Mix and keeps both mixers running indefinitely.
-        let inputStreams = AudioDevices.streamCount(device, scope: kAudioObjectPropertyScopeInput)
-        let outputStreams = AudioDevices.streamCount(device, scope: kAudioObjectPropertyScopeOutput)
+        let inputStreams = hardware.streamCount(device, scope: kAudioObjectPropertyScopeInput)
+        let outputStreams = hardware.streamCount(device, scope: kAudioObjectPropertyScopeOutput)
         let inputUsage = (0..<inputStreams).map { !map.ignoredInputs.contains($0) }
         let outputUsage = (0..<outputStreams).map { $0 >= fxOutputs }
-        let inputStatus = AudioDevices.setIOProcStreamUsage(device, proc: proc,
+        let inputStatus = hardware.setIOProcStreamUsage(device, proc: proc,
             scope: kAudioObjectPropertyScopeInput, enabled: inputUsage)
         guard inputStatus == noErr else { return inputStatus }
-        let outputStatus = AudioDevices.setIOProcStreamUsage(device, proc: proc,
+        let outputStatus = hardware.setIOProcStreamUsage(device, proc: proc,
             scope: kAudioObjectPropertyScopeOutput, enabled: outputUsage)
         guard outputStatus == noErr else { return outputStatus }
-        return AudioDeviceStart(device, proc)
+        return hardware.startIOProc(proc, on: device)
     }
 
     private func teardown() {
@@ -499,15 +498,13 @@ public final class MixerEngine {
             isStarted = false
         }
         if let aggregate, let proc {
-            AudioDeviceStop(aggregate, proc)
-            AudioDeviceDestroyIOProcID(aggregate, proc)
+            hardware.stopIOProc(proc, on: aggregate)
+            hardware.destroyIOProc(proc, on: aggregate)
         }
         proc = nil
-        if let aggregate { AudioHardwareDestroyAggregateDevice(aggregate) }
+        if let aggregate { hardware.destroyAggregateDevice(aggregate) }
         aggregate = nil
-        if #available(macOS 14.2, *) {
-            for tap in tapIDs { AudioHardwareDestroyProcessTap(tap) }
-        }
+        for tap in tapIDs { hardware.destroyProcessTap(tap) }
         tapIDs = []
         if let dsp {
             lastDiagnostics = diagnostics
@@ -517,53 +514,31 @@ public final class MixerEngine {
     }
 
     private func installSystemListeners() {
-        addListener(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
-        if Self.supportedOS {
-            addListener(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList, debounced: true)
+        if let listener = addListener(.devices) { systemListeners.append(listener) }
+        if Self.supportedOS, let listener = addListener(.processObjects, debounced: true) {
+            systemListeners.append(listener)
         }
     }
 
     private func updateDeviceListeners(fx: AudioObjectID?, mix: AudioObjectID?) {
-        let deviceListeners = listeners.filter { $0.object != AudioObjectID(kAudioObjectSystemObject) }
-        for listener in deviceListeners { remove(listener) }
-        listeners.removeAll { $0.object != AudioObjectID(kAudioObjectSystemObject) }
-        if let fx { addListener(fx, kAudioDevicePropertyNominalSampleRate) }
-        if let mix { addListener(mix, kAudioDevicePropertyDeviceIsRunningSomewhere) }
+        for listener in deviceListeners { hardware.removeListener(listener) }
+        deviceListeners = []
+        if let fx, let listener = addListener(.sampleRate(fx)) { deviceListeners.append(listener) }
+        if let mix, let listener = addListener(.isRunningSomewhere(mix)) { deviceListeners.append(listener) }
     }
 
-    private func addListener(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
-                             debounced: Bool = false) {
-        var address = Self.address(selector)
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self, !self.isShutdown else { return }
-                if debounced { self.scheduleProcessRefresh() }
-                else { self.reconcile() }
-            }
+    private func addListener(_ property: AudioHardwareProperty, debounced: Bool = false) -> AudioHardwareListener? {
+        hardware.addListener(for: property) { [weak self] in
+            guard let self, !self.isShutdown else { return }
+            if debounced { self.scheduleProcessRefresh() }
+            else { self.reconcile() }
         }
-        if AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block) == noErr {
-            listeners.append(Listener(object: object, selector: selector, block: block))
-        }
-    }
-
-    private func remove(_ listener: Listener) {
-        var address = Self.address(listener.selector)
-        AudioObjectRemovePropertyListenerBlock(listener.object, &address, DispatchQueue.main, listener.block)
     }
 
     private func scheduleProcessRefresh() {
         guard isEnabled else { return }
-        debounce?.invalidate()
-        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.reconcile() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        debounce = timer
-    }
-
-    private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
-                                   mElement: kAudioObjectPropertyElementMain)
+        debounce?.cancel()
+        debounce = clock.schedule(after: 0.3, repeats: false) { [weak self] in self?.reconcile() }
     }
 
     private func notify() { delegate?.mixerEngineDidChange(self) }

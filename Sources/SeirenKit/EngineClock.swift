@@ -6,8 +6,9 @@ package protocol EngineTimer: AnyObject {
     func cancel()
 }
 
-/// The time `MonitorEngine` reads and the timers it waits on, so tests can
-/// move time forward without sleeping. `SystemClock` is the real implementation.
+/// The time `MonitorEngine` and `MixerEngine` read and the timers they wait
+/// on, so tests can move time forward without sleeping. `SystemClock` is the
+/// real implementation.
 @MainActor
 package protocol EngineClock: AnyObject {
     /// Seconds since boot.
