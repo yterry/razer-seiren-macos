@@ -113,10 +113,16 @@ final class MixerEngineTests: XCTestCase {
     func testStartRetryBackoffAppliesToSameInputsAndClearsOnSuccess() {
         let inputs = MixerEngine.Snapshot(fx: 1, mix: 2, rate: 48000,
             appBundleIDs: ["chrome"], apps: [[3]], recorders: [4], ownProcess: 5)
-        let failure = MixerEngine.StartFailure.recording(result: .failed(-1), snapshot: inputs, now: 100)
-        XCTAssertNotNil(failure)
-        for (time, expected) in [(100.0, false), (104.999, false), (105.0, true), (106.0, true)] {
-            XCTAssertEqual(MixerEngine.shouldRetryStart(snapshot: inputs, failure: failure, now: time), expected)
+        var failure: MixerEngine.StartFailure?
+        for (count, delay) in [(1, 5.0), (2, 10), (3, 20), (4, 60), (5, 60)] {
+            failure = MixerEngine.StartFailure.recording(result: .failed(-1), snapshot: inputs, now: 100,
+                                                         previous: failure)
+            XCTAssertEqual(failure?.consecutiveFailures, count)
+            for (time, expected) in [(100, false), (100 + delay - 0.001, false), (100 + delay, true),
+                                     (101 + delay, true)] {
+                XCTAssertEqual(MixerEngine.shouldRetryStart(snapshot: inputs, failure: failure, now: time),
+                               expected, "failure \(count) at \(time)")
+            }
         }
         var changed = [MixerEngine.Snapshot]()
         var next = inputs; next.fx = 6; changed.append(next)
@@ -128,10 +134,17 @@ final class MixerEngineTests: XCTestCase {
         next = inputs; next.ownProcess = 6; changed.append(next)
         for snapshot in changed {
             XCTAssertTrue(MixerEngine.shouldRetryStart(snapshot: snapshot, failure: failure, now: 100))
+            let restarted = MixerEngine.StartFailure.recording(result: .failed(-1), snapshot: snapshot,
+                                                               now: 100, previous: failure)
+            XCTAssertEqual(restarted?.consecutiveFailures, 1, "new inputs restart the count")
         }
-        let cleared = MixerEngine.StartFailure.recording(result: .running, snapshot: inputs, now: 101)
+        let cleared = MixerEngine.StartFailure.recording(result: .running, snapshot: inputs, now: 101,
+                                                         previous: failure)
         XCTAssertNil(cleared)
         XCTAssertTrue(MixerEngine.shouldRetryStart(snapshot: inputs, failure: cleared, now: 101))
+        let afterSuccess = MixerEngine.StartFailure.recording(result: .failed(-1), snapshot: inputs,
+                                                              now: 102, previous: cleared)
+        XCTAssertEqual(afterSuccess?.consecutiveFailures, 1, "a working start restarts the count")
     }
 
     func testRunPolicy() {

@@ -188,18 +188,25 @@ public final class MixerEngine {
 
     package struct StartFailure {
         var snapshot: Snapshot
+        var status: OSStatus
         var time: TimeInterval
+        /// Failed starts in a row with this snapshot.
+        var consecutiveFailures: Int
 
-        static func recording(result: State, snapshot: Snapshot, now: TimeInterval) -> StartFailure? {
-            guard case .failed = result else { return nil }
-            return StartFailure(snapshot: snapshot, time: now)
+        /// A successful start clears the failure; new inputs restart the count.
+        static func recording(result: State, snapshot: Snapshot, now: TimeInterval,
+                              previous: StartFailure? = nil) -> StartFailure? {
+            guard case .failed(let status) = result else { return nil }
+            let earlier = previous.flatMap { $0.snapshot == snapshot ? $0.consecutiveFailures : nil } ?? 0
+            return StartFailure(snapshot: snapshot, status: status, time: now,
+                                consecutiveFailures: earlier + 1)
         }
     }
 
     nonisolated package static func shouldRetryStart(snapshot: Snapshot, failure: StartFailure?,
                                                     now: TimeInterval) -> Bool {
         guard let failure, failure.snapshot == snapshot else { return true }
-        return now - failure.time >= 5
+        return now - failure.time >= StartRetryBackoff.delay(consecutiveFailures: failure.consecutiveFailures)
     }
 
     private let runWithoutRecorder: Bool
@@ -257,6 +264,8 @@ public final class MixerEngine {
         } else if !enabled {
             timer?.cancel(); timer = nil
             debounce?.cancel(); debounce = nil
+            // Turning the mixer back on retries at once.
+            startFailure = nil
         }
         reconcile()
         if changed { notify() }
@@ -388,6 +397,7 @@ public final class MixerEngine {
         // the failure across idle/teardown so every entry point obeys backoff.
         guard Self.shouldRetryStart(snapshot: current, failure: startFailure,
                                     now: clock.uptime) else { return }
+        let previous = startFailure
         teardown()
         snapshot = current
         let status = start(current)
@@ -395,13 +405,20 @@ public final class MixerEngine {
             isStarted = true
             EventLog.shared.log(category: .mixer, message:
                 "start: \(channels.count) channels, \(lastDiagnostics.taps.count) taps")
+            if let previous, previous.snapshot == current {
+                EventLog.shared.log(category: .mixer, message:
+                    "start recovered after \(previous.consecutiveFailures + 1) attempts")
+            }
             state = .running
         } else {
-            EventLog.shared.log(category: .mixer, message: "start failed: status=\(status)")
+            // A stuck start would otherwise fill the log that bug reports copy.
+            if previous?.snapshot != current || previous?.status != status {
+                EventLog.shared.log(category: .mixer, message: "start failed: status=\(status)")
+            }
             teardown(); state = .failed(status)
         }
         startFailure = StartFailure.recording(result: state, snapshot: current,
-                                              now: clock.uptime)
+                                              now: clock.uptime, previous: previous)
     }
 
     @available(macOS 14.2, *)

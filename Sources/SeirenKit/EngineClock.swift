@@ -45,3 +45,16 @@ package final class SystemClock: EngineClock {
         return SystemTimer(timer)
     }
 }
+
+/// How long `MonitorEngine` and `MixerEngine` wait before starting again with
+/// the same inputs after consecutive failed starts: 5, 10, 20, then 60 s.
+package enum StartRetryBackoff {
+    package static func delay(consecutiveFailures: Int) -> TimeInterval {
+        switch consecutiveFailures {
+        case ...1: return 5
+        case 2: return 10
+        case 3: return 20
+        default: return 60
+        }
+    }
+}
