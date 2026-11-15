@@ -109,9 +109,9 @@ The core lives in **`SeirenKit`** (no AppKit, fully testable):
 
 ```swift
 let engine = MonitorEngine(deviceNameMatch: "seiren")
-engine.enable()          // find the Seiren, start the IOProc
+engine.setMode(.always)  // find the Seiren, start the IOProc (the mode persists across unplug)
 engine.level = 0.8       // 0...1, applied live
-engine.disable()         // stop monitoring (intent persists across unplug)
+engine.setMode(.off)     // stop monitoring
 ```
 
 > The reference IOProc is already in the repo - see `swMonProc` / `softwareMonitor()` in [`Sources/seiren-probe/main.swift`](Sources/seiren-probe/main.swift), which you can run today (`swift run seiren-probe monitor swmon 0.9`) to hear the exact path the app uses.
@@ -133,12 +133,24 @@ It is **not** a zero-latency hardware path (which, again, macOS won't give us he
 ```
 Sources/
   SeirenKit/         model-independent core (no AppKit, fully testable)
-    MonitorEngine.swift   IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
-    AudioDevices.swift    Core Audio device + recording-process queries
-    MixerEngine.swift     Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
-    EQEngine.swift        RBJ-cookbook coefficient math + voice presets
-    Settings.swift        versioned UserDefaults preferences + schema migrations
-    ...                   (legacy HID model/registry types; see docs/PROTOCOL.md)
+    MonitorEngine.swift      IOProc: mic → gate → EQ → monitor; +Studio → Seiren FX
+    AudioDevices.swift       Core Audio device + recording-process queries
+    AudioHardware.swift      everything MonitorEngine asks of Core Audio, behind a protocol tests fake
+    EngineClock.swift        the clock and timers both engines use, so tests can move time forward
+    MixerEngine.swift        Stream Mixer: process taps + Seiren FX → Seiren Stream Mix
+    MixerHardware.swift      the process taps and devices MixerEngine asks Core Audio for
+    EQEngine.swift           RBJ-cookbook coefficient math + voice presets
+    Settings.swift           versioned UserDefaults preferences + schema migrations
+    EventLog.swift           recent engine, route, device, mixer, lighting and power events
+    DiagnosticsReport.swift  the text the menu's Copy Diagnostics puts on the clipboard
+    UpdateCheck.swift        the daily check for a newer GitHub release
+    CrashReportFinder.swift  finds the report macOS wrote after the app crashed
+    DriverCheck.swift        the Seiren FX devices `seiren-probe driver-check` expects
+    CoreAudioCode.swift      Core Audio error codes as readable text
+    LightingController.swift, RazerLighting.swift
+                             Chroma lighting over the mic's vendor HID channel
+    DeviceModel.swift, DeviceRegistry.swift, SeirenController.swift, Hex.swift
+                             HID model and registry types (see docs/PROTOCOL.md)
   SeirenDSP/         RT-safe C DSP: biquad EQ, noise gate, RNNoise bridge, resampler,
                      stream mix bus (gain ramps + limiter)
   RNNoise/           vendored xiph/rnnoise (BSD-3) — the "Studio" denoiser
@@ -146,12 +158,18 @@ Sources/
                      modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
                      Stream Mixer ▸, Seiren FX install
                      AppDelegate+{Voice,Mixer,Lighting,Driver,LaunchAtLogin,Diagnostics,FirstLaunch}.swift, MixerChannelView.swift, PercentSlider.swift
+                     DriverInstaller.swift (Seiren FX install), Strings.swift (every user-facing string)
   seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
+Tests/
+  SeirenKitTests/    SeirenKit unit tests, with fake Core Audio and mixer hardware
+  SeirenMacTests/    menu-bar app tests: menu states, strings, driver install, first launch
 Driver/SeirenFX/     the loopback virtual audio devices, Seiren FX and Seiren
                      Stream Mix (AudioServerPlugIn)
 docs/
   HARDWARE_SIDETONE.md  why hardware sidetone isn't reachable on macOS
   PROTOCOL.md           device topology + the (EQ/DSP) HID protocol notes
+  CREATOR_DESIGN.md     the design document for the creator features
+  RNNOISE_PLAN.md       the plan behind Studio Denoise
 devices/             example/contributed device metadata (data, not code)
 ```
 

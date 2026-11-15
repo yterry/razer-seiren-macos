@@ -46,7 +46,7 @@ are — this is the fix.
 | Other Seirens | untested | if it has a jack | ✅ via Seiren FX | - |
 
 No V3 Mini has been tested on a Mac yet: its support was tested with another input-only audio device ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#11-razer-seiren-v3-mini-from-its-usb-descriptors)).
-**A model not in the table** gets the audio features if macOS names the device with "Seiren" (monitoring needs a headphone jack), and no lighting.
+**A model without its own row** (the Other Seirens line) gets the audio features if macOS names the device with "Seiren" (monitoring needs a headphone jack), and no lighting.
 If you try one, please [report how it went](https://github.com/yterry/razer-seiren-macos/issues/new/choose).
 
 ## Install
@@ -75,7 +75,9 @@ That build predates the Developer ID - the cask clears its Gatekeeper quarantine
 > The `brew trust` line is a one-time approval for a third-party tap - Homebrew 6+ requires it for any tap outside the official repos (older Homebrew ignores it harmlessly).
 > Skip it and you'll see *"Refusing to load cask … from untrusted tap"*; just run it once and retry.
 
-That gets you **headphone monitoring** right away.
+Then open **Seiren** from `/Applications`.
+It appears as a microphone icon (🎙) in the menu bar, with no window and no Dock icon; [First run](#first-run) covers what to do next.
+Headphone monitoring works from there.
 To unlock the **EQ and noise suppression** - and send the *processed* voice to other apps - open **🎙 → Voice ▸ Install Seiren FX…** once; it installs the bundled audio device and asks for your password (a one-time admin prompt).
 See [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
 
@@ -151,7 +153,7 @@ Then shape and clean your voice under **🎙 → Voice**, and install **Seiren F
 
 The Mini has no headphone jack, so there is nothing to monitor into - the app's job for it is the **EQ + noise suppression**, sent to OBS / Zoom / Discord through Seiren FX.
 The menu says so the first time ("This mic has no headphone jack - it works through Seiren FX") and offers the one-time install; the volume slider and Lighting menu don't apply to the Mini and stay out of the way.
-Confirm the route from the terminal with `swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
+From a source checkout, confirm the route from the terminal with `swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
 
 ## Features
 
@@ -272,7 +274,7 @@ Your choice is remembered and re-applied whenever the mic reconnects, because th
 
 - The first lighting change prompts for **Input Monitoring** permission - that is how macOS gates the mic's HID control channel (grant it later under **System Settings → Privacy & Security → Input Monitoring** if you miss the prompt).
   The audio features never need this, and until you touch Lighting the app leaves the device's lights (and that permission) completely alone.
-- CLI equivalent for scripting and diagnostics: `swift run seiren-probe lighting`.
+- CLI equivalent for scripting and diagnostics, from a source checkout: `swift run seiren-probe lighting`.
 - How the protocol was recovered from Synapse's own lighting engine (no USB capture involved): [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §5.
 
 ### Why monitoring is software
@@ -308,38 +310,101 @@ The details are in [How it works](CONTRIBUTING.md#how-it-works), [the latency tr
 
 ## Troubleshooting
 
-**`Invalid manifest … Undefined symbols … PackageDescription.Package.__allocating_init`**
+To get help with any problem, click the 🎙 menu and choose **Copy Diagnostics**, near the bottom of the menu.
+That copies a plain-text report of the app and Seiren FX versions, the engine's state, your audio devices, the permissions Seiren has and its recent events.
+Read the text, then paste it into a [bug report](https://github.com/yterry/razer-seiren-macos/issues/new?template=bug.yml).
+Devices other than Seirens are listed by type only, but check that you are happy to post everything in it.
 
-`Package.swift` can't link against your toolchain's `PackageDescription`.
-This almost always means **only the Command Line Tools are installed (no full Xcode)**, or `xcode-select` points at a stale/partial CLT.
-Fix it:
+### Nothing appears in the menu bar after installing
 
-```sh
-xcode-select -p          # if this prints /Library/Developer/CommandLineTools, that's the problem
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-swift --version          # should report Swift 6.x
-swift build
-```
+- Seiren has no window and no Dock icon.
+  Open **Seiren** from `/Applications`, then look for the microphone icon in the menu bar.
+  The first launch also shows a dialog titled "Seiren runs in the menu bar".
+- On a Mac with a notch, menu bar icons that do not fit are hidden behind the camera.
+  Quit or hide some other menu bar apps to make room.
+- On macOS 26 or later, open **System Settings → Menu Bar** and check that Seiren is allowed in the menu bar.
+- If you can't tell whether Seiren is running, open Activity Monitor and search for `seiren-mac`.
 
-**Monitoring won't turn on / I hear nothing.**
+### "Microphone access denied"
 
-- Confirm **Microphone** permission is granted (System Settings → Privacy & Security → Microphone).
-- Confirm the Seiren is selected as a usable device - `swift run seiren-probe` should list a device whose name contains "Seiren".
-- Confirm your headphones are in the **Seiren's** jack, not the Mac's.
+- The menu says "Microphone access is required".
+  Choose **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone**.
+- Turn on Seiren in that list, then open the 🎙 menu again; the app checks the permission each time the menu opens.
+- If the menu still says "Microphone access denied", choose **Quit Seiren** and open Seiren from `/Applications` again.
 
-**Apps on Seiren FX hear my Mac's mic instead of the Seiren.**
+### "Couldn't start audio"
 
-- The app didn't find the Seiren, so Automatic fell back to another mic (the menu's first line names it).
-  `swift run seiren-probe inputs` lists every input and which one Automatic picks; the Seiren must appear there as eligible.
-- Check that **Input ▸** is set to **Automatic** or to the Seiren.
+- The line under it names the Core Audio error.
+  Choose **Try Again**.
+- If it fails again, unplug the Seiren, plug it back in and wait a few seconds; the app starts again on its own when the mic reappears.
+- Check that the Seiren is listed under **System Settings → Sound → Input**.
+- If it still fails, choose **Copy Diagnostics** and open a bug report with the text.
+- From a source checkout: `swift run seiren-probe route` runs the engine for 5 s and prints what it saw.
 
-**V3 Mini: the menu says “needs Seiren FX” / apps record a flat mic.**
+### The menu says a mic "needs Seiren FX"
 
-- The Mini has no jack, so everything runs through Seiren FX: install it from **Voice ▸ Install Seiren FX…**, set the mode to **On — always**, then pick **Seiren FX** as the microphone in the app you record with.
-- `swift run seiren-probe route` runs the real engine for 5 s and prints whether the route is live, the buffer layout, and the mic's peak level.
-  A peak of “silence” with the route live usually means the mic is muted (the tap-to-mute LED is red).
+- The mic has no headphone jack (the V3 Mini is one), so the menu says "This mic has no headphone jack - it works through Seiren FX" and nothing runs until Seiren FX is installed.
+- Choose **Install Seiren FX…** in the menu, confirm, and enter your password.
+- Choose **On — always** or **Auto — only while an app uses the mic**, then pick **Seiren FX** as the microphone in the app you record with.
+- If the app records silence, check the mic's tap-to-mute LED: red means the mic is muted.
+- From a source checkout: `swift run seiren-probe route` runs the engine for 5 s and prints whether the route is live, the buffer layout and the mic's peak level.
 
-**Turn off Auto's standby.**
+### "Seiren FX was copied but macOS did not load it"
+
+- This dialog appears when the install finished but macOS did not start the new audio device.
+  Restart the Mac.
+- After the restart, open the 🎙 menu.
+  The version line near the bottom names the Seiren FX version instead of "Seiren FX not installed".
+- If it still says "Seiren FX not installed", choose **Voice ▸ Install Seiren FX…** again.
+  If that shows the same dialog, choose **Copy Diagnostics** and open a bug report with the text.
+- From a source checkout: `swift run seiren-probe driver-check` lists the Seiren FX devices macOS loaded and names each check that failed.
+
+### Apps on Seiren FX hear silence or the wrong microphone
+
+- Check that the mode is **On — always** or **Auto — only while an app uses the mic**.
+  With **Off**, nothing reaches Seiren FX.
+- If the menu says "Seiren FX couldn't start - apps using it hear silence", choose **Try Again**.
+- The first line of the menu names the mic Seiren FX is using.
+  If it names your Mac's mic instead of the Seiren, the app did not find the Seiren and **Input ▸ Automatic** fell back to another mic.
+  Unplug the Seiren and plug it back in, and check that **Input ▸** is set to **Automatic** or to the Seiren.
+- Check that the recording app's microphone is **Seiren FX** and that the mic's tap-to-mute LED is not red.
+- From a source checkout: `swift run seiren-probe inputs` lists every input and which one Automatic picks, and `swift run seiren-probe listen "Seiren FX"` prints what other apps hear, once a second.
+
+### Stream Mixer channels are silent
+
+- The app channels and **Desktop audio** need permission to record your computer's audio.
+  Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on Seiren, then choose **Quit Seiren** from the 🎙 menu and open it again.
+- **Voice** is silent while the mode is **Off**, and the menu says "Voice is silent while monitoring is Off".
+- The mixer runs only while an app records **Seiren Stream Mix**; until then it says "Starts when an app records Seiren Stream Mix".
+  Check that your streaming app's microphone is **Seiren Stream Mix**.
+- If the menu says "Couldn't start the Stream Mixer", choose **Try Again** under it.
+- Check that the channel is not muted: a muted channel's button shows a crossed-out speaker.
+- From a source checkout: `swift run seiren-probe mix 5 --app <bundle id>` runs the mixer for 5 s and prints every channel's level.
+
+### Lighting does nothing
+
+- Only the V3 Pro has a Chroma ring; the Lighting menu is hidden for a V3 Mini.
+- If **Lighting ▸** says "Lighting needs Input Monitoring access", choose **Open Input Monitoring Settings…** and turn on Seiren in **System Settings → Privacy & Security → Input Monitoring**.
+- "Applies when the Seiren is connected" means the app does not see the mic's lighting yet; check the USB cable and plug the mic back in.
+- If it says "Couldn't reach the mic's lighting", choose **Try Again** under it.
+- From a source checkout: `swift run seiren-probe lighting` reads the firmware version, serial number, lighting mode and brightness.
+
+### "Seiren quit unexpectedly last time"
+
+- The top of the menu shows this after the app crashed, with three items.
+- **Copy Crash Report** copies the report macOS wrote, and **Report on GitHub…** opens a new bug report.
+  Paste the report into its **Crash report** field, and add the text from **Copy Diagnostics** too.
+- Read the crash report before posting: it includes your Mac model, your macOS version and file paths that can contain your account name.
+- **Dismiss** hides the notice until the app crashes again.
+
+### Monitoring is on but I hear nothing
+
+- The first line of the menu should say "Monitoring:" and the Seiren's name.
+- Plug your headphones into the **Seiren's** jack, not the Mac's.
+- Drag the **Volume** slider up.
+- From a source checkout: `swift run seiren-probe monitor swmon 0.9` runs the same monitor the app uses until you press Return.
+
+### Turn off Auto's standby
 
 - To rule out the silent headphone-side standby while you troubleshoot Auto, turn it off from Terminal and then quit and relaunch the app:
   ```sh
@@ -369,7 +434,7 @@ swift build
 
 ## Building from source
 
-**Requirements:** macOS 13+ and a **Swift 6 toolchain** (full **Xcode 16+** recommended - see [Troubleshooting](#troubleshooting) for why Command-Line-Tools-only can fail).
+**Requirements:** macOS 13+ and a **Swift 6 toolchain** (full **Xcode 16+** recommended - see [Build error with only the Command Line Tools](#build-error-with-only-the-command-line-tools) for why Command-Line-Tools-only can fail).
 
 ```sh
 git clone https://github.com/yterry/razer-seiren-macos.git && cd razer-seiren-macos
@@ -379,6 +444,21 @@ swift build -c release
 
 Then continue with [First run](#first-run).
 A source build installs Seiren FX with the scripts under [Install the Seiren FX driver](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
+
+### Build error with only the Command Line Tools
+
+**`Invalid manifest … Undefined symbols … PackageDescription.Package.__allocating_init`**
+
+`Package.swift` can't link against your toolchain's `PackageDescription`.
+This almost always means **only the Command Line Tools are installed (no full Xcode)**, or `xcode-select` points at a stale/partial CLT.
+Fix it:
+
+```sh
+xcode-select -p          # if this prints /Library/Developer/CommandLineTools, that's the problem
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+swift --version          # should report Swift 6.x
+swift build
+```
 
 ### Run the tests / dev build
 
@@ -393,6 +473,7 @@ swift run seiren-probe listen "Seiren FX"   # what other apps hear on Seiren FX,
 swift run seiren-probe startup     # measure cold mic startup and Seiren FX overhead
 swift run seiren-probe mix 5 --app com.spotify.client   # run the Stream Mixer, report every channel's level
 swift run seiren-probe lighting    # read-only lighting probe (firmware, serial, brightness)
+swift run seiren-probe driver-check   # check the installed Seiren FX driver's devices
 ```
 
 How the app is put together is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
