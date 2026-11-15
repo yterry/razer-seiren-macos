@@ -1,0 +1,12 @@
+{
+  "name": "Razer Seiren V2 X",
+  "pid": 1347,
+  "hidUsagePage": 12,
+  "chromaLighting": false,
+  "notes": "pid 0x0543. USB mic with a headphone jack (1 input channel, 2 output channels, 48 kHz), so software monitoring runs on the device directly. It exposes a single HID interface on the Consumer page (0x000C, usage 0x01): report 0x01 carries the volume up/down keys plus a 15-byte Output, and report 0xF0 declares a 7-byte Output. There is no Razer vendor page (no 0xFF53/0xFF07) and no Chroma zone, and neither Output report has been exercised, so the app sends it nothing. Core Audio exposes its mic gain, headphone volume and a play-through (hardware sidetone) mute + volume as standard USB-Audio-Class controls.",
+  "commands": {
+    "monitorOn": null,
+    "monitorOff": null,
+    "handshake": null
+  }
+}
