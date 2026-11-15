@@ -320,6 +320,15 @@ swift build
 - `swift run seiren-probe route` runs the real engine for 5 s and prints whether the route is live, the buffer layout, and the mic's peak level.
   A peak of “silence” with the route live usually means the mic is muted (the tap-to-mute LED is red).
 
+**Turn off Auto's standby.**
+
+- To rule out the silent headphone-side standby while you troubleshoot Auto, turn it off from Terminal and then quit and relaunch the app:
+  ```sh
+  defaults write com.yterry.seiren-mac auto.standbyEnabled -bool false
+  ```
+- Auto then starts the microphone from cold when an app starts recording, so the first quarter of a second of your voice can be cut off.
+- To turn standby back on, run `defaults delete com.yterry.seiren-mac auto.standbyEnabled` and relaunch.
+
 ## Uninstall
 
 1. Remove the Seiren FX driver, if you installed it: open **🎙 → Voice ▸ Uninstall Seiren FX…**, confirm, and enter your password.

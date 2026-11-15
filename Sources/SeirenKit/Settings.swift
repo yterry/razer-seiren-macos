@@ -23,6 +23,7 @@ public final class Settings {
         static let lightEffect   = "lighting.effect"    // ChromaEffect.rawValue (Int)
         static let lightColor    = "lighting.color"     // "RRGGBB"
         static let lightLevel    = "lighting.brightness" // Int 0...100
+        static let autoStandby   = "auto.standbyEnabled" // Bool, set with `defaults write`
     }
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
@@ -88,6 +89,12 @@ public final class Settings {
     public var inputSourceName: String? {
         get { defaults.string(forKey: Key.inputName) }
         set { defaults.set(newValue, forKey: Key.inputName) }
+    }
+
+    /// Whether Auto keeps the Seiren's headphone output running between calls.
+    /// There is no menu item; absence reads as on.
+    public var autoStandbyEnabled: Bool {
+        defaults.object(forKey: Key.autoStandby) == nil ? true : defaults.bool(forKey: Key.autoStandby)
     }
 
     /// Persisted monitor level, or nil if the user never set one.

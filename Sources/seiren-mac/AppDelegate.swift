@@ -115,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             NSWorkspace.shared.notificationCenter.addObserver(
                 self, selector: #selector(standbyConditionChanged(_:)), name: name, object: nil)
         }
+        updateStandbyAllowed()
 
         rebuildMenu()
 
@@ -971,6 +972,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     private func updateStandbyAllowed() {
+        guard settings.autoStandbyEnabled else {
+            engine.setStandbyAllowed(false, reason: "disabled by preference")
+            return
+        }
         engine.setStandbyAllowed(!screensAsleep && !systemAsleep && !sessionInactive)
     }
 
