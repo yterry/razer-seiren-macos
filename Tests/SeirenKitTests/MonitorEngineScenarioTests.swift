@@ -44,7 +44,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     // MARK: Scenarios
 
     func testAlwaysModeSeirenUnpluggedAndPluggedBackIn() {
-        let hardware = FakeAudioHardware(devices: [seiren])
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
         let engine = makeEngine(on: hardware)
         let monitor = IOProc(kind: .monitor, device: seiren.id)
 
@@ -73,7 +73,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
 
     func testAutoModeWithFXSeirenUnpluggedDuringRecordingFallsBackToDefaultInputAndBack() throws {
         // The headset is the default input; the built-in mic must not win over it.
-        let hardware = FakeAudioHardware(devices: [builtInMic, headset, seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [builtInMic, headset, seiren, fx, fxFeeder], clock: clock)
         hardware.defaultInputID = headset.id
         let engine = makeEngine(on: hardware)
         let standby = IOProc(kind: .standby, device: seiren.id)
@@ -135,7 +135,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testPinnedInputDisappearsThenAutomaticTakesOverUntilItReturns() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, headset, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, headset, fx, fxFeeder], clock: clock)
         hardware.recorders = [recorder(on: fx.id)]
         let engine = makeEngine(on: hardware)
         let pinned = MonitorEngine.InputPreference.device(uid: headset.uid)
@@ -181,7 +181,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
 
     func testTwoSeirensPreferTheFullDuplexOneAndFallBackToTheInputOnlyOne() throws {
         // The input-only Seiren is listed first, so order alone would pick it.
-        let hardware = FakeAudioHardware(devices: [mini, seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [mini, seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
 
         engine.setMode(.always)
@@ -212,7 +212,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testInputOnlySeirenNeedsFXUntilSeirenFXIsInstalled() throws {
-        let hardware = FakeAudioHardware(devices: [mini])
+        let hardware = FakeAudioHardware(devices: [mini], clock: clock)
         let engine = makeEngine(on: hardware)
 
         engine.setMode(.always)
@@ -239,7 +239,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testSeirenFXDeviceIDChangeTearsDownOnceAndStartsOnce() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
         engine.setMode(.always)
         XCTAssertEqual(engine.state, .running)
@@ -272,7 +272,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testFailedStartIsRetriedAfterBackoffAndRecovers() {
-        let hardware = FakeAudioHardware(devices: [seiren])
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware)
         let monitor = IOProc(kind: .monitor, device: seiren.id)
@@ -302,7 +302,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testAutoModeRecorderGapShorterThanTheGracePeriodKeepsTheRoute() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
         engine.setMode(.auto)
         XCTAssertEqual(engine.state, .waiting)
@@ -336,7 +336,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testStandbyStopsForSleepAndStartsAgainOnWake() {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
         let standby = IOProc(kind: .standby, device: seiren.id)
 
@@ -373,7 +373,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testSampleRateChangeWhileRunningRestartsTheSameIOProc() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
         engine.setMode(.always)
         XCTAssertEqual(engine.state, .running)
@@ -399,7 +399,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     // MARK: Start failures with microphone access reported
 
     func testDenialCodeWithAccessGrantedIsRetriedOnAJacklessSeiren() throws {
-        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareIllegalOperationError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
 
@@ -419,7 +419,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testDenialCodeOnTheFXRouteWithAccessGrantedFallsBackToDirectMonitoring() {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareIllegalOperationError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
 
@@ -433,7 +433,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testDenialCodeWithoutReportedAccessIsADenialAndIsNotRetried() {
-        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareIllegalOperationError]
         let engine = makeEngine(on: hardware)
 
@@ -445,7 +445,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testDenialCodeWithAccessUndeterminedIsADenial() {
-        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareIllegalOperationError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .undetermined })
 
@@ -457,7 +457,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testDenialCodeOnSampleRateRestartWithAccessGrantedIsRetried() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         engine.setMode(.always)
         XCTAssertEqual(engine.state, .running)
@@ -480,7 +480,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     // MARK: Seiren FX start fails and direct monitoring runs in its place
 
     func testFailedSeirenFXStartFallsBackToDirectMonitoringAndRecoversAfterBackoff() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         let monitor = IOProc(kind: .monitor, device: seiren.id)
@@ -521,7 +521,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testRepeatedSeirenFXStartFailuresBackOffAndKeepDirectMonitoring() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let failure = kAudioHardwareUnspecifiedError
         // The first Seiren FX start, the direct start that follows, then four retries.
         hardware.startResults = [failure, noErr, failure, failure, failure, failure]
@@ -571,7 +571,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
         // A second copy of the app holds the aggregate's fixed UID.
         let taken = Device(id: 40, uid: MonitorEngine.aggregateUID, name: "Seiren Voice",
                            inputStreams: 2, outputStreams: 2, isHidden: true, isVirtual: true)
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder, taken])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder, taken], clock: clock)
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         let monitor = IOProc(kind: .monitor, device: seiren.id)
 
@@ -607,7 +607,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testRetryNowStartsSeirenFXWithoutWaitingForTheBackoff() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         engine.setMode(.always)
@@ -627,7 +627,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testModeOffClearsTheSeirenFXRouteFailureAndItsRetry() {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         engine.setMode(.always)
@@ -646,7 +646,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testShutdownClearsTheSeirenFXRouteFailureAndItsRetry() {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         engine.setMode(.always)
@@ -658,7 +658,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testUnpluggingTheSeirenClearsTheFailureAndTheNextStartIsNotDelayed() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         hardware.startResults = [kAudioHardwareUnspecifiedError]
         let engine = makeEngine(on: hardware, microphoneAccess: { .granted })
         engine.setMode(.always)
@@ -684,7 +684,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     func testSeirenFXRouteFailureIsLoggedOncePerDistinctStatusAndOnceOnRecovery() {
         let marker = "scenario \(UUID().uuidString)"
         EventLog.shared.log(category: .system, message: "\(marker)")
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let first = kAudioHardwareUnspecifiedError
         let second = kAudioHardwareNotRunningError
         // The first Seiren FX start, the direct start, then three retries.
@@ -714,7 +714,7 @@ final class MonitorEngineScenarioTests: XCTestCase {
     }
 
     func testDirectMonitoringWithoutSeirenFXSetsNoFailureAndSchedulesNoRetry() {
-        let hardware = FakeAudioHardware(devices: [seiren])
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
         let engine = makeEngine(on: hardware)
 
         engine.setMode(.always)
@@ -729,12 +729,308 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    // MARK: Edge cases
+
+    func testDeviceEventsFromTheFailedStartsOwnAggregateDoNotBypassTheBackoff() throws {
+        let hardware = FakeAudioHardware(devices: [mini, fx, fxFeeder], clock: clock)
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        let engine = makeEngine(on: hardware)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareUnspecifiedError))
+        guard case .createAggregate(let failedAggregate, _)? = lifecycleCalls(hardware).first else {
+            return XCTFail("the start must begin with the aggregate: \(lifecycleCalls(hardware))")
+        }
+        let failedRoute = IOProc(kind: .route, device: failedAggregate)
+        let attempt: [Call] = [
+            .createAggregate(failedAggregate, subDeviceUIDs: [mini.uid, fxFeeder.uid]),
+            .createIOProc(failedRoute), .startIOProc(failedRoute),
+            .destroyIOProc(failedRoute), .destroyAggregate(failedAggregate),
+        ]
+        XCTAssertEqual(lifecycleCalls(hardware), attempt)
+
+        // The main queue delivers the device-list events of that create and destroy.
+        clock.advance(by: 0)
+        clock.advance(by: 4.9)
+        XCTAssertEqual(lifecycleCalls(hardware), attempt, "no second attempt before 5 s")
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareUnspecifiedError))
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        let mark = hardware.calls.count
+        clock.advance(by: 0.1)
+        XCTAssertEqual(engine.state, .running)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(aggregate, subDeviceUIDs: [mini.uid, fxFeeder.uid]),
+            .createIOProc(route), .startIOProc(route),
+        ])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testDeniedAccessOpensNothingAndRecheckingAfterAGrantStartsTheMode() throws {
+        for mode in [MonitorEngine.Mode.auto, .always] {
+            let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+            let access = AccessStub(.denied)
+            let engine = makeEngine(on: hardware, microphoneAccess: { access.value })
+
+            engine.setMode(mode)
+            clock.advance(by: 5)
+            XCTAssertEqual(engine.state, .permissionDenied, "\(mode)")
+            XCTAssertEqual(engine.activeSource, input(seiren, isSeiren: true), "\(mode)")
+            XCTAssertFalse(engine.isStandbyRunning, "\(mode)")
+            XCTAssertEqual(lifecycleCalls(hardware), [], "a denied mic must not be opened in \(mode)")
+
+            access.value = .granted
+            engine.recheckMicrophoneAccess()
+            clock.advance(by: 0)
+            switch mode {
+            case .auto:
+                let standby = IOProc(kind: .standby, device: seiren.id)
+                XCTAssertEqual(engine.state, .waiting)
+                XCTAssertEqual(lifecycleCalls(hardware), [.createIOProc(standby), .startIOProc(standby)])
+                XCTAssertEqual(hardware.runningIOProcs, [standby])
+            default:
+                XCTAssertEqual(engine.state, .running)
+                XCTAssertTrue(engine.isRoutingThroughFX)
+                let aggregate = try XCTUnwrap(hardware.aggregates.first)
+                XCTAssertEqual(hardware.runningIOProcs, [IOProc(kind: .route, device: aggregate)])
+            }
+            XCTAssertEqual(engine.mode, mode)
+
+            assertShutdownLeavesNothing(engine, hardware)
+        }
+    }
+
+    func testDefaultInputChangeWithoutASeirenMovesTheRouteToTheNewDefault() throws {
+        let hardware = FakeAudioHardware(devices: [builtInMic, headset, fx, fxFeeder], clock: clock)
+        hardware.defaultInputID = builtInMic.id
+        hardware.recorders = [recorder(on: fx.id)]
+        let engine = makeEngine(on: hardware)
+
+        engine.setMode(.auto)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(engine.activeSource, input(builtInMic, isSeiren: false))
+        XCTAssertEqual(lastAggregateSubDevices(hardware), [builtInMic.uid, fxFeeder.uid])
+        let firstAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let firstRoute = IOProc(kind: .route, device: firstAggregate)
+
+        let mark = hardware.calls.count
+        hardware.defaultInputID = headset.id
+        hardware.fireDefaultInputChanged()
+        clock.advance(by: 3)
+
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(engine.activeSource, input(headset, isSeiren: false))
+        let secondAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let secondRoute = IOProc(kind: .route, device: secondAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(firstRoute), .destroyIOProc(firstRoute), .destroyAggregate(firstAggregate),
+            .createAggregate(secondAggregate, subDeviceUIDs: [headset.uid, fxFeeder.uid]),
+            .createIOProc(secondRoute), .startIOProc(secondRoute),
+        ])
+        XCTAssertEqual(hardware.runningIOProcs, [secondRoute])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testWithoutPerProcessRecordingAutoRunsASeirenAlwaysAndUsesNoOtherMic() throws {
+        // Before macOS 14 the engine cannot see which app records what.
+        let hardware = FakeAudioHardware(devices: [builtInMic, fx, fxFeeder], clock: clock)
+        hardware.recordingProcessesSupported = false
+        hardware.recorders = [recorder(on: fx.id)]
+        let engine = makeEngine(on: hardware)
+
+        engine.setMode(.auto)
+        clock.advance(by: 5)
+        XCTAssertEqual(engine.state, .noDevice, "another mic needs positive recorder evidence")
+        XCTAssertNil(engine.activeSource)
+        XCTAssertFalse(engine.otherInputsSupported)
+        XCTAssertEqual(lifecycleCalls(hardware), [])
+
+        // With a Seiren, Auto runs the route like On - always, with no recorder seen.
+        plug(seiren, into: hardware)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(engine.activeSource, input(seiren, isSeiren: true))
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertTrue(hardware.runningIOProcs.contains(route))
+
+        let mark = hardware.calls.count
+        clock.advance(by: 10)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [], "auto polls must not stop the route")
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testRecorderOnStreamMixAloneStartsAutoOnlyWhenStreamMixIsATrigger() throws {
+        let streamMix = Device(id: 22, uid: MonitorEngine.streamMixDeviceUID, name: "Seiren Stream Mix",
+                               inputStreams: 1)
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder, streamMix], clock: clock)
+        hardware.recorders = [recorder(on: streamMix.id)]
+        let engine = makeEngine(on: hardware)
+        let standby = IOProc(kind: .standby, device: seiren.id)
+
+        engine.setMode(.auto)
+        hardware.fireRunningStateChanged(on: streamMix.id)
+        clock.advance(by: 5)
+        XCTAssertFalse(engine.includeStreamMixInTriggers)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertEqual(lifecycleCalls(hardware), [.createIOProc(standby), .startIOProc(standby)])
+
+        let mark = hardware.calls.count
+        engine.includeStreamMixInTriggers = true
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(aggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(route), .startIOProc(route),
+        ])
+        XCTAssertEqual(hardware.runningIOProcs, [standby, route])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testAudioServiceRestartWithTheSameDeviceIDsBuildsANewAggregateAndIOProc() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        let firstAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let firstRoute = IOProc(kind: .route, device: firstAggregate)
+
+        // coreaudiod restarts: every device leaves and returns under the same
+        // ID, and the private aggregate is gone. The restart can finish before
+        // the main queue delivers its events, so the engine sees only the end.
+        let mark = hardware.calls.count
+        hardware.devices = [seiren, fx, fxFeeder]
+        hardware.fireDevicesChanged()
+        hardware.fireDevicesChanged()
+
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(engine.activeSource, input(seiren, isSeiren: true))
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        let secondAggregate = try XCTUnwrap(hardware.aggregates.first)
+        XCTAssertNotEqual(secondAggregate, firstAggregate)
+        let secondRoute = IOProc(kind: .route, device: secondAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(firstRoute), .destroyIOProc(firstRoute), .destroyAggregate(firstAggregate),
+            .createAggregate(secondAggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(secondRoute), .startIOProc(secondRoute),
+        ])
+        XCTAssertEqual(hardware.runningIOProcs, [secondRoute])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testFailedRestartAfterASampleRateChangeFailsRetriesAndRecoversAfterFiveSeconds() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .running)
+        let firstAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let firstRoute = IOProc(kind: .route, device: firstAggregate)
+        let index = try XCTUnwrap(hardware.devices.firstIndex { $0.id == firstAggregate })
+
+        var mark = hardware.calls.count
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        hardware.devices[index].sampleRate = 96000
+        hardware.fireSampleRateChanged(on: firstAggregate)
+
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareUnspecifiedError))
+        XCTAssertTrue(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(firstRoute), .startIOProc(firstRoute),
+            .stopIOProc(firstRoute), .destroyIOProc(firstRoute), .destroyAggregate(firstAggregate),
+        ])
+        XCTAssertTrue(hardware.ioProcs.isEmpty)
+
+        mark = hardware.calls.count
+        clock.advance(by: 4.9)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [], "no attempt before 5 s")
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareUnspecifiedError))
+
+        clock.advance(by: 0.1)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertFalse(engine.isRetryScheduled)
+        let secondAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let secondRoute = IOProc(kind: .route, device: secondAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .createAggregate(secondAggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(secondRoute), .startIOProc(secondRoute),
+        ])
+        XCTAssertEqual(hardware.runningIOProcs, [secondRoute])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testStandbyStopsForGoodOnceThisProcessIsSeenRecordingTheSeiren() {
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
+        let engine = makeEngine(on: hardware)
+        let standby = IOProc(kind: .standby, device: seiren.id)
+        engine.setMode(.auto)
+        XCTAssertTrue(engine.isStandbyRunning)
+        XCTAssertEqual(lifecycleCalls(hardware), [.createIOProc(standby), .startIOProc(standby)])
+
+        // With no route running, only standby can make this process record the Seiren.
+        let mark = hardware.calls.count
+        hardware.ownInputs = [seiren.id]
+        clock.advance(by: 0.1)
+        XCTAssertFalse(engine.isStandbyRunning)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.stopIOProc(standby), .destroyIOProc(standby)])
+
+        // The process stops recording, polls and a device event come and go.
+        hardware.ownInputs = nil
+        clock.advance(by: 10)
+        hardware.fireDevicesChanged()
+        XCTAssertFalse(engine.isStandbyRunning)
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.stopIOProc(standby), .destroyIOProc(standby)],
+                       "standby must stay stopped")
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testModeChangeDuringBackoffClearsTheFailureAndStartsAtOnce() {
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
+        hardware.startResults = [kAudioHardwareUnspecifiedError]
+        hardware.recorders = [recorder(on: seiren.id)]
+        let engine = makeEngine(on: hardware)
+        let monitor = IOProc(kind: .monitor, device: seiren.id)
+
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .failed(kAudioHardwareUnspecifiedError))
+        XCTAssertTrue(engine.isRetryScheduled)
+
+        clock.advance(by: 1)
+        let mark = hardware.calls.count
+        engine.setMode(.auto)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertNil(engine.startFailure)
+        XCTAssertFalse(engine.isRetryScheduled)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [.createIOProc(monitor), .startIOProc(monitor)])
+        XCTAssertEqual(hardware.runningIOProcs, [monitor])
+
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     // MARK: Helpers
 
     private func makeEngine(on hardware: FakeAudioHardware,
                             microphoneAccess: (@MainActor () -> MonitorEngine.MicrophoneAccess)? = nil)
         -> MonitorEngine {
         MonitorEngine(microphoneAccess: microphoneAccess, hardware: hardware, clock: clock)
+    }
+
+    @MainActor
+    private final class AccessStub {
+        var value: MonitorEngine.MicrophoneAccess
+        init(_ value: MonitorEngine.MicrophoneAccess) { self.value = value }
     }
 
     private func input(_ device: Device, isSeiren: Bool) -> InputDevice {
@@ -778,6 +1074,10 @@ final class MonitorEngineScenarioTests: XCTestCase {
     private func assertShutdownLeavesNothing(_ engine: MonitorEngine, _ hardware: FakeAudioHardware,
                                              file: StaticString = #filePath, line: UInt = #line) {
         engine.shutdown()
+        // Deliver the events the shutdown queued; the engine must not act on them.
+        let shutdownCalls = hardware.calls.count
+        clock.advance(by: 0)
+        XCTAssertEqual(lifecycleCalls(hardware, since: shutdownCalls), [], file: file, line: line)
         XCTAssertEqual(engine.state, .stopped, file: file, line: line)
         XCTAssertNil(engine.activeSource, file: file, line: line)
         XCTAssertTrue(hardware.ioProcs.isEmpty, "IOProcs left: \(hardware.ioProcs)", file: file, line: line)

@@ -15,6 +15,7 @@ final class MonitorEngineFakeHardwareTests: XCTestCase {
     private let fx = Device(id: 20, uid: MonitorEngine.fxDeviceUID, name: "Seiren FX", inputStreams: 1)
     private let fxFeeder = Device(id: 21, uid: MonitorEngine.fxFeederUID, name: "Seiren FX Feeder",
                                   outputStreams: 1, isHidden: true)
+    private let clock = FakeClock()
 
     override func tearDown() async throws {
         // Starting a route sets the globals the RT procs read; restore the
@@ -25,11 +26,11 @@ final class MonitorEngineFakeHardwareTests: XCTestCase {
     }
 
     private func makeEngine(on hardware: FakeAudioHardware) -> MonitorEngine {
-        MonitorEngine(hardware: hardware, clock: FakeClock())
+        MonitorEngine(hardware: hardware, clock: clock)
     }
 
     func testSeirenAppearingInAlwaysModeStartsTheMonitor() {
-        let hardware = FakeAudioHardware()
+        let hardware = FakeAudioHardware(clock: clock)
         let engine = makeEngine(on: hardware)
         defer { engine.shutdown() }
         engine.setMode(.always)
@@ -47,7 +48,7 @@ final class MonitorEngineFakeHardwareTests: XCTestCase {
     }
 
     func testSeirenDisappearingTearsDownAndReportsNoDevice() {
-        let hardware = FakeAudioHardware(devices: [seiren])
+        let hardware = FakeAudioHardware(devices: [seiren], clock: clock)
         let engine = makeEngine(on: hardware)
         defer { engine.shutdown() }
         engine.setMode(.always)
@@ -66,7 +67,7 @@ final class MonitorEngineFakeHardwareTests: XCTestCase {
     }
 
     func testSeirenFXDeviceIDChangeRestartsTheRoute() throws {
-        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder])
+        let hardware = FakeAudioHardware(devices: [seiren, fx, fxFeeder], clock: clock)
         let engine = makeEngine(on: hardware)
         defer { engine.shutdown() }
         engine.setMode(.always)
