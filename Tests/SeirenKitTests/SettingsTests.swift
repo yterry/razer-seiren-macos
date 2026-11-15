@@ -38,6 +38,35 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(defaults.integer(forKey: "schemaVersion"), Settings.currentSchema)
     }
 
+    func testFreshInstallOwesItsFirstRunUntilItIsRecorded() throws {
+        let defaults = try makeDefaults()
+
+        XCTAssertFalse(Settings(defaults).firstRunDone)
+        // A launch that ended before the first run was recorded still owes it.
+        XCTAssertFalse(Settings(defaults).firstRunDone)
+
+        Settings(defaults).firstRunDone = true
+
+        XCTAssertTrue(Settings(defaults).firstRunDone)
+    }
+
+    func testUpgradeFromAnEarlierVersionOwesNoFirstRun() throws {
+        let earlierInstalls: [(String, [String: Any])] = [
+            ("previous version with a saved mode", ["schemaVersion": 6, "monitorMode": "auto"]),
+            ("previous version left in Off", ["schemaVersion": 6]),
+            ("oldest schema with a saved mode", ["schemaVersion": 1, "monitorMode": "always"]),
+            ("before schemas, mode saved", ["monitorMode": "off"]),
+            ("before modes, monitoring on", ["monitoringEnabled": true]),
+            ("before modes, monitoring off", ["monitoringEnabled": false]),
+        ]
+        for (name, stored) in earlierInstalls {
+            let defaults = try makeDefaults()
+            for (key, value) in stored { defaults.set(value, forKey: key) }
+
+            XCTAssertTrue(Settings(defaults).firstRunDone, name)
+        }
+    }
+
     func testVersionZeroMigratesEnabledMonitoringToAlways() throws {
         let defaults = try makeDefaults()
         defaults.set(true, forKey: "monitoringEnabled")

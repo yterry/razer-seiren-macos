@@ -24,12 +24,14 @@ public final class Settings {
         static let lightColor    = "lighting.color"     // "RRGGBB"
         static let lightLevel    = "lighting.brightness" // Int 0...100
         static let autoStandby   = "auto.standbyEnabled" // Bool, set with `defaults write`
+        static let firstRunDone  = "firstRun.done"      // Bool
     }
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
     /// v3 = lighting keys (absence = "never touched the lights");
-    /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic); v6 = mixer (absence = defaults).
-    public static let currentSchema = 6
+    /// v4 = brand-green -> LED-green fixup; v5 = input preference (absence = automatic); v6 = mixer (absence = defaults);
+    /// v7 = first-run flag (set for installs that already ran an earlier version).
+    public static let currentSchema = 7
 
     public init(_ defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -61,7 +63,25 @@ public final class Settings {
             }
         }
 
+        if from < 7 {
+            // v6 → v7: the first-launch welcome is for new installs only. A
+            // stored schema version, mode or pre-mode Bool means an earlier
+            // version already ran here, so its first run is long over.
+            if from > 0 || defaults.object(forKey: Key.mode) != nil
+                || defaults.object(forKey: Key.legacyEnabled) != nil {
+                defaults.set(true, forKey: Key.firstRunDone)
+            }
+        }
+
         defaults.set(Self.currentSchema, forKey: Key.schemaVersion)
+    }
+
+    // MARK: First run
+
+    /// False on a new install until the first-launch welcome has been answered.
+    public var firstRunDone: Bool {
+        get { defaults.bool(forKey: Key.firstRunDone) }
+        set { defaults.set(newValue, forKey: Key.firstRunDone) }
     }
 
     // MARK: Monitoring
