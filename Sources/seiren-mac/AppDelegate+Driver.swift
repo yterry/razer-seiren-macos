@@ -6,11 +6,11 @@ extension AppDelegate {
     /// and Seiren FX isn't installed, so nothing can run yet. Says why in one
     /// line and puts the install action where the user is already looking.
     func addNeedsFXItems(to menu: NSMenu) {
-        menu.addItem(disabledItem("This mic has no headphone jack - it works through Seiren FX"))
+        menu.addItem(disabledItem(Strings.driverNoHeadphoneJack))
         if DriverInstaller.isBundled {
             menu.addItem(driverMenuItem(offeredDriverAction ?? .install))
         } else {
-            menu.addItem(disabledItem("Install Seiren FX first (scripts/install-driver.sh)"))
+            menu.addItem(disabledItem(Strings.driverInstallFirst))
         }
     }
 
@@ -19,7 +19,7 @@ extension AppDelegate {
     func addDriverUpdateItems(to menu: NSMenu) {
         guard DriverInstaller.isBundled, let action = offeredDriverAction, action != .install else { return }
         menu.addItem(disabledItem(action == .reinstall
-            ? "Seiren FX needs a one-time reinstall" : "A newer Seiren FX comes with this app"))
+            ? Strings.driverNeedsReinstall : Strings.driverUpdateAvailable))
         menu.addItem(driverMenuItem(action))
     }
 
@@ -40,7 +40,7 @@ extension AppDelegate {
     /// A menu item that runs `action`; the confirmation and result dialogs use
     /// the same verb as the item's title.
     static func driverMenuItem(_ action: DriverAction) -> NSMenuItem {
-        let item = NSMenuItem(title: "\(action.verb) Seiren FX…",
+        let item = NSMenuItem(title: Strings.driverMenuItem(action.verb),
                               action: #selector(AppDelegate.changeDriver(_:)), keyEquivalent: "")
         item.representedObject = action
         return item
@@ -57,10 +57,10 @@ extension AppDelegate {
 
         var verb: String {
             switch self {
-            case .install: "Install"
-            case .update: "Update"
-            case .reinstall: "Reinstall"
-            case .uninstall: "Uninstall"
+            case .install: Strings.driverVerbInstall
+            case .update: Strings.driverVerbUpdate
+            case .reinstall: Strings.driverVerbReinstall
+            case .uninstall: Strings.driverVerbUninstall
             }
         }
     }
@@ -68,12 +68,11 @@ extension AppDelegate {
     /// Asked before the password prompt: every driver change restarts coreaudiod.
     static func driverConfirmationAlert(_ action: DriverAction) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "\(action.verb) Seiren FX?"
-        alert.informativeText = "\(action == .uninstall ? "Uninstalling" : "Installing") Seiren FX " +
-            "restarts audio on this Mac for about a second. " +
-            "Calls and recordings in other apps will be interrupted."
+        alert.messageText = Strings.driverConfirmTitle(action.verb)
+        alert.informativeText = action == .uninstall ? Strings.driverConfirmUninstalling
+                                                     : Strings.driverConfirmInstalling
         alert.addButton(withTitle: action.verb)
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: Strings.cancel)
         return alert
     }
 
@@ -82,23 +81,19 @@ extension AppDelegate {
     static func driverInstalledAlert(_ action: DriverAction) -> NSAlert {
         let alert = NSAlert()
         if action == .install {
-            alert.messageText = "Seiren FX installed"
-            alert.informativeText = "Audio was restarted. Turn on the Equalizer under " +
-                "Voice, then choose “Seiren FX” as the microphone in OBS / Zoom / " +
-                "Discord to send them your processed voice."
+            alert.messageText = Strings.driverInstalledTitle
+            alert.informativeText = Strings.driverInstalledMessage
         } else {
-            alert.messageText = action == .update ? "Seiren FX updated" : "Seiren FX reinstalled"
-            alert.informativeText = "Audio was restarted. Your Voice settings and the apps " +
-                "that use Seiren FX keep working as before."
+            alert.messageText = action == .update ? Strings.driverUpdatedTitle : Strings.driverReinstalledTitle
+            alert.informativeText = Strings.driverReplacedMessage
         }
         return alert
     }
 
     static func driverNotLoadedAlert() -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "Seiren FX was copied but macOS did not load it"
-        alert.informativeText = "The driver is at:\n\(DriverInstaller.installedPath)\n\n" +
-            "Restart the Mac to load it."
+        alert.messageText = Strings.driverNotLoadedTitle
+        alert.informativeText = Strings.driverNotLoadedMessage(DriverInstaller.installedPath)
         alert.alertStyle = .warning
         return alert
     }
@@ -117,8 +112,7 @@ extension AppDelegate {
         case .cancelled:
             return
         case .failed(let why):
-            presentError("Couldn't install Seiren FX:\n\(why)\n\n" +
-                         "You can also install it manually with scripts/install-driver.sh.")
+            presentError(Strings.driverInstallFailed(why))
             return
         case .ok:
             // coreaudiod just restarted: force a clean re-acquire so the engine
@@ -141,7 +135,7 @@ extension AppDelegate {
         case .cancelled:
             return
         case .failed(let why):
-            presentError("Couldn't uninstall Seiren FX:\n\(why)")
+            presentError(Strings.driverUninstallFailed(why))
         case .ok:
             // Nothing to wait for once the device is gone; give coreaudiod
             // time to come back before re-acquiring.

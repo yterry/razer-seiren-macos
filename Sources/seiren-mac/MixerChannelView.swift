@@ -61,18 +61,19 @@ final class MixerChannelView: NSView {
 
     func update(_ channel: MixerEngine.Channel) {
         self.channel = channel
-        nameLabel.stringValue = channel.name
-        valueLabel.stringValue = channel.muted ? "Muted" : "\(Int((channel.level * 100).rounded()))%"
+        let name = Strings.mixerChannelName(channel)
+        nameLabel.stringValue = name
+        valueLabel.stringValue = channel.muted ? Strings.mixerMuted : Strings.percent(Int((channel.level * 100).rounded()))
         slider.doubleValue = Double(channel.level)
         // A muted channel keeps its level for when it comes back; dimming the
         // slider shows that it isn't reaching the stream right now.
         slider.alphaValue = channel.muted ? 0.4 : 1
-        slider.cell?.setAccessibilityLabel("\(channel.name) level on stream")
+        slider.cell?.setAccessibilityLabel(Strings.mixerLevelLabel(name))
         mute.image = NSImage(systemSymbolName: channel.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                              accessibilityDescription: nil)
-        mute.toolTip = channel.muted ? "Unmute on stream" : "Mute on stream"
-        mute.cell?.setAccessibilityLabel("\(channel.name): \(mute.toolTip ?? "")")
-        mute.cell?.setAccessibilityValue(channel.muted ? "Muted" : "Unmuted")
+        mute.toolTip = channel.muted ? Strings.mixerUnmute : Strings.mixerMute
+        mute.cell?.setAccessibilityLabel(Strings.mixerMuteLabel(name, mute.toolTip ?? ""))
+        mute.cell?.setAccessibilityValue(channel.muted ? Strings.mixerMuted : Strings.mixerUnmuted)
     }
 
     @objc private func levelChanged() {

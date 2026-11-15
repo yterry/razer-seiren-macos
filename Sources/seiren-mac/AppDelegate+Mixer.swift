@@ -3,7 +3,7 @@ import SeirenKit
 
 extension AppDelegate {
     func streamMixerMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Stream Mixer", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: Strings.mixerTitle, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.autoenablesItems = false
         submenu.delegate = self
@@ -22,23 +22,23 @@ extension AppDelegate {
             let updating = mixer.availability == .needsDriverUpdate
             if DriverInstaller.isBundled {
                 menu.addItem(driverMenuItem(updating ? .update : .install))
-                menu.addItem(disabledItem(updating ? "Adds the Seiren Stream Mix device" : "Adds Seiren FX and Seiren Stream Mix"))
+                menu.addItem(disabledItem(updating ? Strings.mixerAddsStreamMix : Strings.mixerAddsFXAndStreamMix))
             } else {
-                menu.addItem(disabledItem("Rebuild the driver: scripts/build-driver.sh"))
-                menu.addItem(disabledItem("then: sudo scripts/install-driver.sh"))
+                menu.addItem(disabledItem(Strings.mixerRebuildDriver))
+                menu.addItem(disabledItem(Strings.mixerThenInstallDriver))
             }
             return
         case .unsupportedOS:
-            menu.addItem(disabledItem("Needs macOS 14.2 or later"))
+            menu.addItem(disabledItem(Strings.mixerNeedsMacOS))
             return
         default: break
         }
-        let toggle = NSMenuItem(title: "Mix into Seiren Stream Mix",
+        let toggle = NSMenuItem(title: Strings.mixerToggle,
                                 action: #selector(toggleMixer), keyEquivalent: "")
         toggle.target = self
         toggle.state = mixer.isEnabled ? .on : .off
         menu.addItem(toggle)
-        menu.addItem(disabledItem("In OBS, pick “Seiren Stream Mix” as the mic"))
+        menu.addItem(disabledItem(Strings.mixerOBSHint))
         guard mixer.isEnabled else { return }
         menu.addItem(.separator())
         for channel in mixer.channels {
@@ -49,19 +49,19 @@ extension AppDelegate {
                 self.mixer.setMuted(updated.muted, for: updated.source)
                 self.settings.mixerChannels = self.mixer.channels
             }
-            if channel.source == .desktop { row.toolTip = "Every app without its own channel" }
+            if channel.source == .desktop { row.toolTip = Strings.mixerDesktopTooltip }
             item.view = row
             mixerRows.append(row)
             menu.addItem(item)
         }
         menu.addItem(.separator())
         let appChannels = mixer.channels.filter { if case .app = $0.source { return true }; return false }
-        let add = NSMenuItem(title: "Add App", action: nil, keyEquivalent: "")
+        let add = NSMenuItem(title: Strings.mixerAddApp, action: nil, keyEquivalent: "")
         let atLimit = appChannels.count >= MixerEngine.maxAppChannels
         add.submenu = Self.addAppMenu(atLimit ? [] : addableApps(excluding: appChannels), atLimit: atLimit,
                                       target: self)
         menu.addItem(add)
-        let remove = NSMenuItem(title: "Remove App", action: nil, keyEquivalent: "")
+        let remove = NSMenuItem(title: Strings.mixerRemoveApp, action: nil, keyEquivalent: "")
         let removing = NSMenu()
         removing.autoenablesItems = false
         for channel in appChannels {
@@ -87,18 +87,18 @@ extension AppDelegate {
     static func mixerStateItems(state: MixerEngine.State, voiceOff: Bool, target: AnyObject?) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         switch state {
-        case .running: items.append(disabledItem("Live · mixing into Seiren Stream Mix"))
+        case .running: items.append(disabledItem(Strings.mixerLive))
         case .failed(let code):
-            items.append(disabledItem("Couldn't start the Stream Mixer"))
+            items.append(disabledItem(Strings.mixerFailed))
             items.append(disabledItem(CoreAudioCode.errorDescription(code)))
-            let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryMixer), keyEquivalent: "")
+            let retry = NSMenuItem(title: Strings.tryAgain, action: #selector(AppDelegate.retryMixer), keyEquivalent: "")
             retry.target = target
             items.append(retry)
-        default: items.append(disabledItem("Starts when an app records Seiren Stream Mix"))
+        default: items.append(disabledItem(Strings.mixerWaiting))
         }
         if voiceOff {
             if case .failed = state { items.append(.separator()) }
-            items.append(disabledItem("Voice is silent while monitoring is Off"))
+            items.append(disabledItem(Strings.mixerVoiceSilent))
         }
         return items
     }
@@ -130,10 +130,10 @@ extension AppDelegate {
         let apps = NSMenu()
         apps.autoenablesItems = false
         if atLimit {
-            apps.addItem(disabledItem("Up to 6 apps"))
+            apps.addItem(disabledItem(Strings.mixerAppLimit))
             return apps
         }
-        if choices.isEmpty { apps.addItem(disabledItem("No other apps are open")) }
+        if choices.isEmpty { apps.addItem(disabledItem(Strings.mixerNoOtherApps)) }
         for app in choices {
             let choice = NSMenuItem(title: app.name, action: #selector(AppDelegate.addMixerApp(_:)),
                                     keyEquivalent: "")

@@ -40,6 +40,8 @@ for ARCH in arm64 x86_64; do
   lipo "${APP}/Contents/MacOS/seiren-mac" -verify_arch "${ARCH}"
   lipo "${DRIVER}/Contents/MacOS/SeirenFX" -verify_arch "${ARCH}"
 done
+[[ -f "${APP}/Contents/Resources/en.lproj/Localizable.strings" ]] \
+  || fail "en.lproj/Localizable.strings is missing from the app"
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")"
 [[ "${APP_VERSION}" == "${VERSION}" ]] || fail "expected version ${VERSION}, found ${APP_VERSION}"
 

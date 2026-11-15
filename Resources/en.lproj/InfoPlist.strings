@@ -1,0 +1,4 @@
+/* The permission prompts from Sources/seiren-mac/Info.plist. */
+
+"NSMicrophoneUsageDescription" = "Seiren reads your Razer Seiren microphone to monitor it in your headphones, apply the voice EQ and noise suppression, and route the processed voice to your other apps. The mic is used only for this audio processing.";
+"NSAudioCaptureUsageDescription" = "When the Stream Mixer is on, Seiren mixes the audio of your apps into Seiren Stream Mix for your streaming app. Nothing is recorded or saved.";

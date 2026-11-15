@@ -19,18 +19,18 @@ extension AppDelegate {
     /// switched back on.
     static func launchAtLoginState(status: SMAppService.Status, isAppBundle: Bool) -> LaunchAtLoginState {
         guard isAppBundle else {
-            return LaunchAtLoginState(title: "Launch at Login (packaged app only)", checked: false, action: nil)
+            return LaunchAtLoginState(title: Strings.launchAtLoginPackagedOnly, checked: false, action: nil)
         }
         switch status {
         case .enabled:
-            return LaunchAtLoginState(title: "Launch at Login", checked: true, action: .unregister)
+            return LaunchAtLoginState(title: Strings.launchAtLogin, checked: true, action: .unregister)
         case .requiresApproval:
-            return LaunchAtLoginState(title: "Launch at Login (needs approval)", checked: false,
+            return LaunchAtLoginState(title: Strings.launchAtLoginNeedsApproval, checked: false,
                                       action: .openLoginItems)
         case .notRegistered, .notFound:
-            return LaunchAtLoginState(title: "Launch at Login", checked: false, action: .register)
+            return LaunchAtLoginState(title: Strings.launchAtLogin, checked: false, action: .register)
         @unknown default:
-            return LaunchAtLoginState(title: "Launch at Login", checked: false, action: .register)
+            return LaunchAtLoginState(title: Strings.launchAtLogin, checked: false, action: .register)
         }
     }
 
@@ -56,8 +56,8 @@ extension AppDelegate {
                 SMAppService.openSystemSettingsLoginItems()
             }
         } catch {
-            let verb = action == .unregister ? "turn off" : "turn on"
-            presentError("Couldn't \(verb) Launch at Login: \(error.localizedDescription)")
+            presentError(action == .unregister ? Strings.launchAtLoginTurnOffFailed(error.localizedDescription)
+                                               : Strings.launchAtLoginTurnOnFailed(error.localizedDescription))
         }
         rebuildMenu()
     }

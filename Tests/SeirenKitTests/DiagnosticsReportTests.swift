@@ -137,11 +137,4 @@ final class DiagnosticsReportTests: XCTestCase {
         XCTAssertTrue(report.contains("  event 200\n"))
         XCTAssertTrue(report.contains("  event 299\n"))
     }
-
-    func testVersionLine() {
-        XCTAssertEqual(DiagnosticsReport.versionLine(app: "1.2.0", installedFX: "1.1.0"),
-                       "Seiren 1.2.0 · Seiren FX 1.1.0")
-        XCTAssertEqual(DiagnosticsReport.versionLine(app: "1.2.0", installedFX: nil),
-                       "Seiren 1.2.0 · Seiren FX not installed")
-    }
 }

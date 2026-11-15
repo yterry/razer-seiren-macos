@@ -10,9 +10,9 @@ extension AppDelegate {
     /// iconic Razer glow on the hardware itself is pure green - the same
     /// 00FF00 Synapse and openrazer use.
     private static let lightingPalette: [(String, String)] = [
-        ("Razer Green", "00FF00"), ("White", "FFFFFF"), ("Red", "FF0000"),
-        ("Orange", "FF6A00"), ("Yellow", "FFD400"), ("Cyan", "00FFFF"),
-        ("Blue", "0066FF"), ("Purple", "8A2BE2"), ("Pink", "FF1493"),
+        (Strings.lightingRazerGreen, "00FF00"), (Strings.lightingWhite, "FFFFFF"), (Strings.lightingRed, "FF0000"),
+        (Strings.lightingOrange, "FF6A00"), (Strings.lightingYellow, "FFD400"), (Strings.lightingCyan, "00FFFF"),
+        (Strings.lightingBlue, "0066FF"), (Strings.lightingPurple, "8A2BE2"), (Strings.lightingPink, "FF1493"),
     ]
 
     /// Show the Lighting submenu unless the only Seiren we can see is a model
@@ -27,7 +27,7 @@ extension AppDelegate {
     /// on every replug (device lighting state is volatile). Until the user
     /// picks something, the device's own lighting is left untouched.
     func lightingMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Lighting", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: Strings.lightingTitle, action: nil, keyEquivalent: "")
         item.submenu = Self.lightingMenu(lastError: lighting.lastError, deviceConnected: lighting.deviceConnected,
                                          current: settings.lightingState, target: self)
         return item
@@ -39,8 +39,8 @@ extension AppDelegate {
         submenu.autoenablesItems = false
 
         if lastError == .permissionDenied {
-            submenu.addItem(disabledItem("Lighting needs Input Monitoring access"))
-            let open = NSMenuItem(title: "Open Input Monitoring Settings…",
+            submenu.addItem(disabledItem(Strings.lightingNeedsInputMonitoring))
+            let open = NSMenuItem(title: Strings.lightingOpenInputMonitoringSettings,
                                   action: #selector(AppDelegate.openInputMonitoringSettings),
                                   keyEquivalent: "")
             open.target = target
@@ -48,7 +48,7 @@ extension AppDelegate {
             submenu.addItem(open)
             submenu.addItem(.separator())
         } else if !deviceConnected {
-            submenu.addItem(disabledItem("Applies when the Seiren is connected"))
+            submenu.addItem(disabledItem(Strings.lightingAppliesWhenConnected))
             submenu.addItem(.separator())
         }
 
@@ -62,12 +62,12 @@ extension AppDelegate {
             return i
         }
 
-        submenu.addItem(effectItem("Spectrum (device default)", .spectrum))
-        submenu.addItem(effectItem("Breathing", .breathing))
-        submenu.addItem(effectItem("Wave", .wave))
+        submenu.addItem(effectItem(Strings.lightingSpectrum, .spectrum))
+        submenu.addItem(effectItem(Strings.lightingBreathing, .breathing))
+        submenu.addItem(effectItem(Strings.lightingWave, .wave))
 
         // Static ▸ color palette.
-        let staticItem = NSMenuItem(title: "Static", action: nil, keyEquivalent: "")
+        let staticItem = NSMenuItem(title: Strings.lightingStatic, action: nil, keyEquivalent: "")
         staticItem.state = (current?.effect == .static) ? .on : .off
         let colors = NSMenu()
         colors.autoenablesItems = false
@@ -84,15 +84,15 @@ extension AppDelegate {
         staticItem.submenu = colors
         submenu.addItem(staticItem)
 
-        submenu.addItem(effectItem("Off", .off))
+        submenu.addItem(effectItem(Strings.lightingOff, .off))
 
         submenu.addItem(.separator())
         submenu.addItem(lightingBrightnessItem(percent: current?.brightnessPercent ?? 100, target: target))
 
         if deviceConnected, lastError != nil, lastError != .permissionDenied {
             submenu.addItem(.separator())
-            submenu.addItem(disabledItem("Couldn't reach the mic's lighting"))
-            let retry = NSMenuItem(title: "Try Again", action: #selector(AppDelegate.retryLighting), keyEquivalent: "")
+            submenu.addItem(disabledItem(Strings.lightingUnreachable))
+            let retry = NSMenuItem(title: Strings.tryAgain, action: #selector(AppDelegate.retryLighting), keyEquivalent: "")
             retry.target = target
             submenu.addItem(retry)
         }
@@ -122,7 +122,8 @@ extension AppDelegate {
         // Not continuous: each change talks to the device, so send on release.
         slider.isContinuous = false
         slider.isEnabled = true
-        return sliderItem(caption: "Brightness", label: "Lighting brightness", slider: slider)
+        return sliderItem(caption: Strings.lightingBrightnessCaption, label: Strings.lightingBrightnessLabel,
+                          slider: slider)
     }
 
     @objc private func selectLightingEffect(_ sender: NSMenuItem) {

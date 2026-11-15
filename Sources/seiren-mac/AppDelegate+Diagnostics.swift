@@ -75,7 +75,7 @@ extension AppDelegate {
 
     /// The line that says a newer release is out; it opens the release page.
     static func newReleaseItem(_ release: UpdateChecker.Release, target: AnyObject?) -> NSMenuItem {
-        let item = NSMenuItem(title: "Version \(release.version) is available",
+        let item = NSMenuItem(title: Strings.newRelease(release.version.description),
                               action: #selector(openNewRelease), keyEquivalent: "")
         item.target = target
         item.representedObject = release.url
@@ -123,7 +123,7 @@ extension AppDelegate {
             NSPasteboard.general.setString(report, forType: .string)
             settings.crashReportSeenAt = Date()
         } catch {
-            presentError("Couldn't read the crash report: \(error.localizedDescription)")
+            presentError(Strings.crashReadFailed(error.localizedDescription))
         }
     }
 

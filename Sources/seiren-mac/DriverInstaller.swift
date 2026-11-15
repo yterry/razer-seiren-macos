@@ -50,7 +50,7 @@ enum DriverInstaller {
     /// coreaudiod, all under one admin prompt.
     static func install() -> Result {
         guard let src = bundledDriverURL else {
-            return .failed("The bundled SeirenFX.driver wasn't found in the app.")
+            return .failed(Strings.driverNotBundled)
         }
         // Single-quoted paths so spaces are safe; only the copy chain gates
         // success — killall is best-effort (coreaudiod respawns automatically).
@@ -118,6 +118,6 @@ enum DriverInstaller {
         if errText.contains("-128") || errText.localizedCaseInsensitiveContains("cancel") {
             return .cancelled
         }
-        return .failed(errText.isEmpty ? "Installation failed (exit \(process.terminationStatus))." : errText)
+        return .failed(errText.isEmpty ? Strings.driverExitStatus(process.terminationStatus) : errText)
     }
 }
