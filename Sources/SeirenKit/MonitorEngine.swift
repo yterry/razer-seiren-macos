@@ -508,6 +508,7 @@ public final class MonitorEngine {
     private var startupLogTimer: Timer?
     private var routeStartedAt: UInt64?
     private var standbyAllowed = true
+    private var standbySuspendReason: EventLog.Message = "host suspended standby"
     private var standbyProcID: AudioDeviceIOProcID?
     private var standbyDeviceID: AudioObjectID?
     private var standbyDeviceUID: String?
@@ -648,8 +649,10 @@ public final class MonitorEngine {
     }
 
     /// Hosts suspend standby while the display or user session is asleep so
-    /// output I/O does not keep an idle-system-sleep assertion alive.
-    public func setStandbyAllowed(_ allowed: Bool) {
+    /// output I/O does not keep an idle-system-sleep assertion alive, or when
+    /// the user turned it off. `reason` is logged if this stops standby.
+    public func setStandbyAllowed(_ allowed: Bool, reason: EventLog.Message = "host suspended standby") {
+        standbySuspendReason = reason
         guard standbyAllowed != allowed else { return }
         standbyAllowed = allowed
         reconcile()
@@ -767,7 +770,7 @@ public final class MonitorEngine {
             let reason: EventLog.Message
             if mode != .auto { reason = "mode \(mode.rawValue)" }
             else if microphoneAccess == .denied { reason = "microphone access denied" }
-            else if !standbyAllowed { reason = "host suspended standby" }
+            else if !standbyAllowed { reason = standbySuspendReason }
             else if source == nil { reason = "device gone" }
             else if !fxInstalled { reason = "FX unavailable" }
             else { reason = "source has no Seiren headphone output" }
