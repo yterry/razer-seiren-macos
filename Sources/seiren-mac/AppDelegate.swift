@@ -274,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         let failureCode: OSStatus?
         if case .failed(let code) = engine.state { failureCode = code } else { failureCode = engine.fxRouteFailure }
         if let code = failureCode {
-            menu.addItem(disabledItem(Self.coreAudioErrorLine(code)))
+            menu.addItem(disabledItem(CoreAudioCode.errorDescription(code)))
             let retry = NSMenuItem(title: "Try Again", action: #selector(retryAudio), keyEquivalent: "")
             retry.target = self
             menu.addItem(retry)
@@ -414,14 +414,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         return item
     }
 
-    static func coreAudioErrorLine(_ code: OSStatus) -> String {
-        "Core Audio error \(code)"
-    }
-
-    func disabledItem(_ title: String) -> NSMenuItem {
+    static func disabledItem(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         return item
+    }
+
+    func disabledItem(_ title: String) -> NSMenuItem {
+        Self.disabledItem(title)
     }
 
     // MARK: - Actions
@@ -489,6 +489,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         alert.messageText = "Seiren"
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.runModal()
+        Self.runAlert(alert)
+    }
+
+    /// Brings the app forward, then runs `alert`. The app has no Dock icon, so
+    /// a dialog run without activating first can open behind the window the
+    /// user is working in.
+    @discardableResult
+    static func runAlert(_ alert: NSAlert,
+                         activate: () -> Void = { NSApp.activate(ignoringOtherApps: true) },
+                         run: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() })
+        -> NSApplication.ModalResponse {
+        activate()
+        return run(alert)
     }
 }

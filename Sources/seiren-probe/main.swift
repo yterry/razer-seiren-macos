@@ -50,13 +50,7 @@ import SeirenKit
 // MARK: - helpers
 
 func fourCC(_ v: UInt32) -> String {
-    let bytes = [UInt8((v >> 24) & 0xff), UInt8((v >> 16) & 0xff),
-                 UInt8((v >> 8) & 0xff), UInt8(v & 0xff)]
-    let printable = bytes.allSatisfy { $0 >= 0x20 && $0 < 0x7f }
-    if printable, let s = String(bytes: bytes, encoding: .ascii) {
-        return "'\(s)'"
-    }
-    return String(format: "0x%08X", v)
+    CoreAudioCode.fourCharacters(v) ?? String(format: "0x%08X", v)
 }
 
 func address(_ selector: AudioObjectPropertySelector,
@@ -337,7 +331,7 @@ func runRoute(_ args: [String]) {
     case .noDevice:
         print("No input device whose name contains '\(match)'. Plug the mic in, then re-run.")
     case .failed(let code):
-        print("Core Audio error \(code) starting the route. Paste this output in an issue.")
+        print("\(CoreAudioCode.errorDescription(code)) starting the route. Paste this output in an issue.")
     case .waiting:
         print("Standby: starts when another app records from Seiren FX.")
     case .stopped:
