@@ -98,6 +98,22 @@ If you'd rather not trust a prebuilt binary anyway, [build it from source](#buil
 Released zips ship with a **SHA-256 checksum** so you can verify the download.
 (The old **v1.0.0** build predates the Developer ID and is unsigned; its one-time **Open Anyway** instructions live in that release's notes, and the Homebrew cask clears its quarantine flag automatically.)
 
+### Updates
+
+At launch and once a day, the app requests `https://api.github.com/repos/yterry/razer-seiren-macos/releases/latest` to learn the latest release's version.
+That is its only network request, and it carries no account, identifier or cookie, only what any HTTP client sends: your IP address and a default User-Agent naming the app, its build number and the versions of macOS's networking stack and kernel.
+When the latest release is newer than the running app, the 🎙 menu shows **Version X.Y.Z is available**, which opens that release's page.
+The app does not install anything itself: Homebrew users run the `brew upgrade` line above, and zip users download the new zip.
+A failed request shows nothing, and a build without a release version, such as the packaging script's default `0.0.0-dev`, skips the check.
+
+To turn the check off, run this in Terminal and then quit and relaunch the app:
+
+```sh
+defaults write com.yterry.seiren-mac updates.checkEnabled -bool false
+```
+
+To turn it back on, run `defaults delete com.yterry.seiren-mac updates.checkEnabled` and relaunch.
+
 ## First run
 
 1. Open **Seiren** from `/Applications` (or run `.build/release/seiren-mac` from a [source build](#building-from-source)).

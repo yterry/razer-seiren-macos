@@ -36,4 +36,15 @@ final class StatusItemTests: XCTestCase {
             XCTAssertTrue(image.isTemplate, "\(state)")
         }
     }
+
+    func testNewReleaseItemNamesTheVersionAndCarriesItsReleasePage() throws {
+        let url = try XCTUnwrap(URL(string: "https://github.com/yterry/razer-seiren-macos/releases/tag/v1.10.0"))
+        let release = UpdateChecker.Release(version: try XCTUnwrap(ReleaseVersion("v1.10.0")), url: url)
+
+        let item = AppDelegate.newReleaseItem(release, target: nil)
+
+        XCTAssertEqual(item.title, "Version 1.10.0 is available")
+        XCTAssertNotNil(item.action)
+        XCTAssertEqual(item.representedObject as? URL, url)
+    }
 }

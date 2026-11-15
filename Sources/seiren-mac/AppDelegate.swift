@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private let mixer = MixerEngine()
     private let lighting = LightingController()
     private let settings = Settings()
+    private lazy var updateChecker = UpdateChecker(settings: settings, runningVersion: Self.appVersion)
     private var levelSlider: NSSlider?
     private var mixerMenu: NSMenu?
     private var mixerRows: [MixerChannelView] = []
@@ -118,6 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         updateStandbyAllowed()
 
         rebuildMenu()
+
+        updateChecker.onChange = { [weak self] in self?.rebuildMenu() }
+        updateChecker.start()
 
         // Restore the saved mode (migrating the pre-mode Bool if present). If
         // monitoring should be on, request mic access first so a previously
@@ -310,6 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         // 7. Versions, and a bug report that needs no Swift toolchain.
         menu.addItem(disabledItem(DiagnosticsReport.versionLine(app: Self.appVersion,
                                                                installedFX: Self.installedFXVersion)))
+        if let release = updateChecker.available {
+            menu.addItem(Self.newReleaseItem(release, target: self))
+        }
         let copy = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
         copy.target = self
         menu.addItem(copy)
@@ -848,6 +855,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         return item
     }
 
+    /// The line that says a newer release is out; it opens the release page.
+    static func newReleaseItem(_ release: UpdateChecker.Release, target: AnyObject?) -> NSMenuItem {
+        let item = NSMenuItem(title: "Version \(release.version) is available",
+                              action: #selector(openNewRelease), keyEquivalent: "")
+        item.target = target
+        item.representedObject = release.url
+        return item
+    }
+
     private static func coreAudioErrorLine(_ code: OSStatus) -> String {
         "Core Audio error \(code)"
     }
@@ -984,6 +1000,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
             return
         }
         engine.setStandbyAllowed(!screensAsleep && !systemAsleep && !sessionInactive)
+    }
+
+    @objc private func openNewRelease(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL { NSWorkspace.shared.open(url) }
     }
 
     @objc private func openInputMonitoringSettings() {

@@ -25,6 +25,7 @@ public final class Settings {
         static let lightLevel    = "lighting.brightness" // Int 0...100
         static let autoStandby   = "auto.standbyEnabled" // Bool, set with `defaults write`
         static let firstRunDone  = "firstRun.done"      // Bool
+        static let updateCheck   = "updates.checkEnabled" // Bool, set with `defaults write`
     }
 
     /// Bump when adding a migration. v1 = mode strings; v2 = EQ keys;
@@ -115,6 +116,14 @@ public final class Settings {
     /// There is no menu item; absence reads as on.
     public var autoStandbyEnabled: Bool {
         defaults.object(forKey: Key.autoStandby) == nil ? true : defaults.bool(forKey: Key.autoStandby)
+    }
+
+    // MARK: Updates
+
+    /// Whether the app asks GitHub for the latest release. There is no menu
+    /// item; absence reads as on.
+    public var updateCheckEnabled: Bool {
+        defaults.object(forKey: Key.updateCheck) == nil ? true : defaults.bool(forKey: Key.updateCheck)
     }
 
     /// Persisted monitor level, or nil if the user never set one.
