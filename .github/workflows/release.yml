@@ -15,9 +15,10 @@ name: Release
 #
 # Signing is opt-in via repository secrets. When MACOS_CERT_P12 (and friends)
 # are present, the build is Developer-ID-signed, notarized, and stapled -
-# Gatekeeper opens it with no warning. Without the secrets, the workflow falls
+# Gatekeeper opens it with no warning. Without the secrets, a tag push falls
 # back to the ad-hoc build with the one-time-bypass release notes, so a release
-# can never fail just because signing isn't configured.
+# can never fail just because signing isn't configured. A manual run with
+# sign=true fails instead of falling back to the ad-hoc build.
 #
 # Required secrets for signed releases:
 #   MACOS_CERT_P12       base64 of the "Developer ID Application" .p12 export

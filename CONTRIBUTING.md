@@ -222,7 +222,7 @@ In the commands, `X.Y.Z` is the new version and `P.Q.R` is the previous release.
    The run must pass.
    A signed dry run fails loudly when the `MACOS_CERT_P12` signing certificate secret is missing, instead of building ad-hoc.
    Its summary shows the release notes a `vX.Y.Z` tag would publish.
-   They must say "Signed with a Developer ID and notarized by Apple"; the unsigned notes mean the signing secrets were not picked up.
+   They must say "Signed with a Developer ID and notarized by Apple".
    The log of the "Verify release archive" step must include `checking notarization and Gatekeeper assessment`, then the line `source=Notarized Developer ID`, and end with `verified dist/Seiren-X.Y.Z.zip (X.Y.Z)`.
    That `source=Notarized Developer ID` line is the Gatekeeper evidence for the build.
    Quit any installed `Seiren.app` and unzip the download with `ditto -x -k /tmp/seiren-dry-run/Seiren-X.Y.Z.zip /tmp/seiren-dry-run`.
