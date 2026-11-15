@@ -285,7 +285,7 @@ public enum NoiseSuppression: String, Equatable, Sendable {
 }
 ```
 
-`rawValue` strings stay stable (`"off"`, `"gate"`, new `"studio"`), so the persisted `voice.ns.mode` key (`Settings.swift:18`) round-trips; an unknown value already falls back to `.off` (`Settings.swift:79`).
+`rawValue` strings stay stable (`"off"`, `"gate"`, new `"studio"`), so the persisted `voice.ns.mode` key (`Settings.Key.nsMode`) round-trips; an unknown value already falls back to `.off` (the `Settings.noiseSuppression` getter).
 
 **Mutual exclusion** is enforced by the apply step: `gate` enables the C gate + disables studio; `studio` enables studio + disables the gate; `off` disables both.
 
@@ -395,9 +395,10 @@ private func studioCaption() -> String {
 
 ### 6.6 Settings
 
-`Settings.swift` needs **no change**: `noiseSuppression` (`:76`) already encodes/decodes `NoiseSuppression.rawValue` and defaults unknown values to `.off`. `AppDelegate.didFinishLaunching` (`:34`) already calls `engine.setNoiseSuppression(settings.noiseSuppression)`, so a persisted `studio` is restored on launch — re-validated against the live rate by `applyNoiseSuppression()`.
+`Settings.swift` needs **no change**: `Settings.noiseSuppression` already encodes/decodes `NoiseSuppression.rawValue` and defaults unknown values to `.off`.
+`AppDelegate.applicationDidFinishLaunching` already calls `engine.setNoiseSuppression(settings.noiseSuppression)`, so a persisted `studio` is restored on launch — re-validated against the live rate by `applyNoiseSuppression()`.
 
-**OFF by default** is preserved: the default for an absent `voice.ns.mode` is `.off` (`Settings.swift:79`).
+**OFF by default** is preserved: the default for an absent `voice.ns.mode` is `.off` (the `Settings.noiseSuppression` getter).
 
 ---
 
