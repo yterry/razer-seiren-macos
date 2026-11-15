@@ -111,6 +111,29 @@ final class UpdateCheckTests: XCTestCase {
         }
     }
 
+    func testTimerTickChecksAgainOnly24HoursOfClockTimeAfterTheLastCheck() async throws {
+        let github = FakeGitHub(latestTag: "v1.5.0")
+        let launch = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var clock = launch
+        let checker = UpdateChecker(settings: Settings(try makeDefaults()), runningVersion: "1.5.0",
+                                    fetch: github.fetch, now: { clock })
+
+        await checker.check()
+        XCTAssertEqual(github.requests.count, 1)
+
+        clock = launch.addingTimeInterval(23 * 60 * 60)
+        await checker.checkIfDue()
+        XCTAssertEqual(github.requests.count, 1)
+
+        clock = launch.addingTimeInterval(24 * 60 * 60)
+        await checker.checkIfDue()
+        XCTAssertEqual(github.requests.count, 2)
+
+        clock = launch.addingTimeInterval(47 * 60 * 60)
+        await checker.checkIfDue()
+        XCTAssertEqual(github.requests.count, 2)
+    }
+
     func testDevelopmentBuildMakesNoRequest() async throws {
         let github = FakeGitHub(latestTag: "v1.10.0")
         let checker = UpdateChecker(settings: Settings(try makeDefaults()), runningVersion: "0.0.0-dev", fetch: github.fetch)

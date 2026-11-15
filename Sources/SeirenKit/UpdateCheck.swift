@@ -58,27 +58,41 @@ public final class UpdateChecker {
     private let settings: Settings
     private let runningVersion: ReleaseVersion?
     private let fetch: Fetch
+    private let now: () -> Date
+    private var lastCheck: Date?
     private var timer: Timer?
 
+    static let checkInterval: TimeInterval = 24 * 60 * 60
+
     public init(settings: Settings, runningVersion: String,
-                fetch: @escaping Fetch = UpdateChecker.fetchFromNetwork) {
+                fetch: @escaping Fetch = UpdateChecker.fetchFromNetwork,
+                now: @escaping () -> Date = Date.init) {
         self.settings = settings
         self.runningVersion = ReleaseVersion(runningVersion)
         self.fetch = fetch
+        self.now = now
     }
 
-    /// Checks now and then every 24 hours.
+    /// Checks now and then once a day. An hourly timer compares the clock with
+    /// the last check, because a timer's own interval stops while the Mac sleeps.
     public func start() {
         Task { await check() }
-        timer = Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.check() }
+        timer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.checkIfDue() }
         }
+    }
+
+    /// Checks when 24 hours or more have passed on the clock since the last check.
+    public func checkIfDue() async {
+        if let lastCheck, now().timeIntervalSince(lastCheck) < Self.checkInterval { return }
+        await check()
     }
 
     /// One check. Makes no request when the check is turned off or the running
     /// app is a development build.
     public func check() async {
         guard settings.updateCheckEnabled, let runningVersion else { return }
+        lastCheck = now()
         guard let (data, response) = try? await fetch(URLRequest(url: Self.latestReleaseURL)),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let latest = try? JSONDecoder().decode(LatestRelease.self, from: data),
