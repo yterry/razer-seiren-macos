@@ -55,6 +55,44 @@ final class DriverInstallerTests: XCTestCase {
         }
     }
 
+    func testRefusesASymlinkedDriverBeforeRunningThePrivilegedCommand() throws {
+        let root = try makeTemporaryDirectory()
+        let target = try makeSignedDriver(in: root.appendingPathComponent("Elsewhere"))
+        let source = root.appendingPathComponent("App/SeirenFX.driver")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: source, withDestinationURL: target)
+
+        XCTAssertThrowsError(try DriverInstallation.install(
+            source: source, destinationDirectory: root.appendingPathComponent("HAL"), privileged: true,
+            signingIdentity: .adHoc, execute: { _ in
+                XCTFail("A symlinked driver must not reach osascript")
+                return (0, "")
+            }
+        )) { error in
+            XCTAssertEqual(error as? DriverInstallation.Failure, .invalidDriverSignature)
+        }
+    }
+
+    func testRefusesADriverReplacedByASymlinkAfterThePreflightCheck() throws {
+        let root = try makeTemporaryDirectory()
+        let source = try makeSignedDriver(in: root.appendingPathComponent("App"))
+        let target = try makeSignedDriver(in: root.appendingPathComponent("Elsewhere"))
+        let destination = root.appendingPathComponent("HAL")
+
+        XCTAssertThrowsError(try DriverInstallation.install(
+            source: source, destinationDirectory: destination, privileged: false,
+            signingIdentity: .adHoc, execute: { arguments in
+                try FileManager.default.removeItem(at: source)
+                try FileManager.default.createSymbolicLink(at: source, withDestinationURL: target)
+                return try DriverInstallation.runAppleScript(arguments)
+            }
+        )) { error in
+            XCTAssertEqual(error as? DriverInstallation.Failure, .invalidDriverSignature)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     func testRequiresATeamSignatureWhenTheAppHasADeveloperTeam() throws {
         let root = try makeTemporaryDirectory()
         let source = try makeSignedDriver(in: root)

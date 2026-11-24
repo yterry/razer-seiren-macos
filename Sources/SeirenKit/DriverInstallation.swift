@@ -45,11 +45,13 @@ package enum DriverInstallation {
         let takeOwnership = privileged
             ? #"/usr/sbin/chown -R root:wheel "$staged" && /bin/chmod -R 755 "$staged" || exit"# : ""
         let shell = """
+        [ ! -L "$1" ] || exit \(rejectedDriverStatus)
         /bin/mkdir -p "$2" || exit
         staging=$(/usr/bin/mktemp -d "$2/.SeirenFX.XXXXXX") || exit
         trap '/bin/rm -rf "$staging"' EXIT
         staged="$staging/${3##*/}"
-        /bin/cp -R "$1" "$staged" || exit
+        /bin/cp -RH "$1" "$staged" || exit
+        [ -d "$staged" ] && [ ! -L "$staged" ] || exit \(rejectedDriverStatus)
         \(takeOwnership)
         if [ -n "$4" ]; then
             /usr/bin/codesign --verify --strict --all-architectures -R "=$4" "$staged"
@@ -86,6 +88,9 @@ package enum DriverInstallation {
             throw Failure.invalidAppSignature
         }
 
+        guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == false else {
+            throw Failure.invalidDriverSignature
+        }
         var driver: SecStaticCode?
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate)
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &driver) == errSecSuccess, let driver,
