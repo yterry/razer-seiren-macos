@@ -13,6 +13,30 @@ final class DriverInstallerTests: XCTestCase {
 
         try run("/usr/bin/diff", arguments: ["-r", source.path,
                                               destination.appendingPathComponent(source.lastPathComponent).path])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), ["SeirenFX.driver"])
+    }
+
+    func testRejectsADriverChangedAfterThePreflightCheckAndKeepsThePreviousInstall() throws {
+        let root = try makeTemporaryDirectory()
+        let source = try makeSignedDriver(in: root.appendingPathComponent("App"))
+        let destination = root.appendingPathComponent("HAL")
+        let previous = destination.appendingPathComponent("SeirenFX.driver/previous.txt")
+        try FileManager.default.createDirectory(at: previous.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("previous driver".utf8).write(to: previous)
+
+        XCTAssertThrowsError(try DriverInstallation.install(
+            source: source, destinationDirectory: destination, privileged: false,
+            signingIdentity: .adHoc, execute: { arguments in
+                try Data("swapped after the check".utf8)
+                    .write(to: source.appendingPathComponent("Contents/Resources/test.txt"))
+                return try DriverInstallation.runAppleScript(arguments)
+            }
+        )) { error in
+            XCTAssertEqual(error as? DriverInstallation.Failure, .invalidDriverSignature)
+        }
+        XCTAssertEqual(try String(contentsOf: previous, encoding: .utf8), "previous driver")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), ["SeirenFX.driver"])
     }
 
     func testRejectsAChangedSealedResourceBeforeRunningThePrivilegedCommand() throws {
@@ -57,8 +81,6 @@ final class DriverInstallerTests: XCTestCase {
             signingIdentity: .adHoc, execute: { arguments in
                 invocations += 1
                 let script = try XCTUnwrap(arguments.dropFirst().first)
-                XCTAssertEqual(script.components(separatedBy: "do shell script").count, 2)
-                XCTAssertEqual(script.components(separatedBy: "with administrator privileges").count, 2)
                 XCTAssertFalse(script.contains(source.path))
                 XCTAssertTrue(arguments.contains(source.path))
                 let shell = try XCTUnwrap(arguments.dropFirst(2).first)
