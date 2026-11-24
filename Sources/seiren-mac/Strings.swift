@@ -489,6 +489,12 @@ enum Strings {
     static var driverNotBundled: String {
         NSLocalizedString("driver.notBundled", bundle: .main, value: "The bundled SeirenFX.driver wasn't found in the app.", comment: "Why an install failed")
     }
+    static var driverInvalidAppSignature: String {
+        NSLocalizedString("driver.invalidAppSignature", bundle: .main, value: "The Seiren app's signature couldn't be verified. Download a fresh copy of Seiren and try again.", comment: "Why a driver install was refused")
+    }
+    static var driverInvalidSignature: String {
+        NSLocalizedString("driver.invalidSignature", bundle: .main, value: "The bundled Seiren FX driver's signature could not be verified for this copy of Seiren. Download a fresh copy of Seiren and try again.", comment: "Why a driver install was refused")
+    }
     static func driverExitStatus(_ status: Int32) -> String {
         String(format: NSLocalizedString("driver.exitStatus", bundle: .main, value: "Installation failed (exit %d).", comment: "Why an install failed; %d is the exit status"), status)
     }
