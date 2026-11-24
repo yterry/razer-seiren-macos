@@ -1,9 +1,9 @@
-import AppKit
 import Foundation
+import SeirenKit
 
 /// Installs the bundled SeirenFX virtual-audio driver into the system HAL
 /// plug-in directory using a single native admin prompt (osascript "with
-/// administrator privileges"). This works for an *unsigned* app — no paid
+/// administrator privileges"). This works for an ad-hoc signed app, with no paid
 /// Developer ID required — and is how a downloaded Seiren.app enables the
 /// EQ-reaches-other-apps feature without the user touching Terminal.
 @MainActor
@@ -52,22 +52,16 @@ enum DriverInstaller {
         guard let src = bundledDriverURL else {
             return .failed(Strings.driverNotBundled)
         }
-        // Single-quoted paths so spaces are safe; only the copy chain gates
-        // success — killall is best-effort (coreaudiod respawns automatically).
-        let shell = """
-        mkdir -p '\(halDirectory)' \
-        && rm -rf '\(installedPath)' \
-        && cp -R '\(src.path)' '\(halDirectory)/' \
-        && chown -R root:wheel '\(installedPath)' \
-        && chmod -R 755 '\(installedPath)' \
-        && (killall coreaudiod 2>/dev/null || true)
-        """
-        return runPrivileged(shell)
+        return result {
+            try DriverInstallation.install(source: src, destinationDirectory: URL(fileURLWithPath: halDirectory),
+                                           privileged: true, signingIdentity: .runningApp())
+        }
     }
 
     static func uninstall() -> Result {
-        let shell = "rm -rf '\(installedPath)' && (killall coreaudiod 2>/dev/null || true)"
-        return runPrivileged(shell)
+        result {
+            try DriverInstallation.uninstall(at: URL(fileURLWithPath: installedPath), privileged: true)
+        }
     }
 
     /// How long coreaudiod takes to exit and come back after `killall`. Until
@@ -90,34 +84,20 @@ enum DriverInstaller {
         }
     }
 
-    /// Run a shell command with admin rights via osascript. Returns `.cancelled`
-    /// if the user dismisses the auth dialog.
-    private static func runPrivileged(_ command: String) -> Result {
-        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
-                             .replacingOccurrences(of: "\"", with: "\\\"")
-        let applescript = "do shell script \"\(escaped)\" with administrator privileges"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", applescript]
-        let errPipe = Pipe()
-        process.standardError = errPipe
-        process.standardOutput = Pipe()
-
+    private static func result(_ operation: () throws -> Void) -> Result {
         do {
-            try process.run()
-            process.waitUntilExit()
+            try operation()
+            return .ok
+        } catch DriverInstallation.Failure.cancelled {
+            return .cancelled
+        } catch DriverInstallation.Failure.invalidAppSignature {
+            return .failed(Strings.driverInvalidAppSignature)
+        } catch DriverInstallation.Failure.invalidDriverSignature {
+            return .failed(Strings.driverInvalidSignature)
+        } catch DriverInstallation.Failure.scriptFailed(let status, let message) {
+            return .failed(message.isEmpty ? Strings.driverExitStatus(status) : message)
         } catch {
             return .failed(error.localizedDescription)
         }
-
-        if process.terminationStatus == 0 { return .ok }
-
-        let errText = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) ?? ""
-        if errText.contains("-128") || errText.localizedCaseInsensitiveContains("cancel") {
-            return .cancelled
-        }
-        return .failed(errText.isEmpty ? Strings.driverExitStatus(process.terminationStatus) : errText)
     }
 }

@@ -433,5 +433,11 @@
 /* Why an install failed */
 "driver.notBundled" = "The bundled SeirenFX.driver wasn't found in the app.";
 
+/* Why a driver install was refused */
+"driver.invalidAppSignature" = "The Seiren app's signature couldn't be verified. Download a fresh copy of Seiren and try again.";
+
+/* Why a driver install was refused */
+"driver.invalidSignature" = "The bundled Seiren FX driver's signature could not be verified for this copy of Seiren. Download a fresh copy of Seiren and try again.";
+
 /* Why an install failed; %d is the exit status */
 "driver.exitStatus" = "Installation failed (exit %d).";
