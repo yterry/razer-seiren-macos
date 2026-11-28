@@ -35,12 +35,29 @@ final class StatusItemTests: XCTestCase {
             (.permissionDenied, "Microphone access denied"),
             (.failed(-1), "Couldn't start audio"),
         ]
+        let button = NSButton()
         for (state, status) in cases {
-            let image = try XCTUnwrap(AppDelegate.statusButtonImage(for: state, fxRouteFailed: false, status: status),
-                                      "\(state)")
+            AppDelegate.configureStatusButton(button, for: state, fxRouteFailed: false, status: status)
+            let image = try XCTUnwrap(button.image, "\(state)")
             XCTAssertEqual(image.accessibilityDescription, status, "\(state)")
+            XCTAssertEqual(button.toolTip, status, "\(state)")
             XCTAssertTrue(image.isTemplate, "\(state)")
         }
+    }
+
+    func testStatusButtonDescribesFXRouteFailureAndClearsItOnRecovery() throws {
+        let button = NSButton()
+        let status = Strings.statusMonitoring("Seiren V3 Chroma")
+
+        AppDelegate.configureStatusButton(button, for: .running, fxRouteFailed: true, status: status)
+        let warning = try XCTUnwrap(button.toolTip)
+        XCTAssertTrue(warning.contains(status))
+        XCTAssertTrue(warning.contains(Strings.fxRouteFailed))
+        XCTAssertEqual(button.image?.accessibilityDescription, warning)
+
+        AppDelegate.configureStatusButton(button, for: .running, fxRouteFailed: false, status: status)
+        XCTAssertEqual(button.toolTip, status)
+        XCTAssertEqual(button.image?.accessibilityDescription, status)
     }
 
     func testNewReleaseItemNamesTheVersionAndCarriesItsReleasePage() throws {

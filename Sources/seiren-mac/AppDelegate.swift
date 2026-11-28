@@ -196,23 +196,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
 
     /// A mic glyph: bright with a waveform while actively monitoring, plain mic
     /// while armed/idle, crossed out when the user has to act, dimmed when off.
-    /// Template-rendered for light/dark bars; the status line is spoken.
+    /// Template-rendered for light/dark bars.
     func configureStatusButtonImage() {
         guard let button = statusItem.button else { return }
-        let status = statusLine()
-        button.image = Self.statusButtonImage(for: engine.state, fxRouteFailed: engine.fxRouteFailure != nil,
-                                              status: status)
+        Self.configureStatusButton(button, for: engine.state, fxRouteFailed: engine.fxRouteFailure != nil,
+                                   status: statusLine())
         button.appearsDisabled = (engine.mode == .off)
-        button.toolTip = status
     }
 
-    /// The status item's glyph for `state`, described by the status line so
-    /// VoiceOver speaks the same text the menu and tooltip show.
-    static func statusButtonImage(for state: MonitorEngine.State, fxRouteFailed: Bool, status: String) -> NSImage? {
+    /// The tooltip and the image's accessibility description use the same
+    /// text, so VoiceOver speaks what the tooltip shows. A failed Seiren FX
+    /// route appends its warning to `status`, because headphone monitoring
+    /// still works while apps recording from Seiren FX hear silence.
+    static func configureStatusButton(_ button: NSButton, for state: MonitorEngine.State,
+                                      fxRouteFailed: Bool, status: String) {
+        let description = fxRouteFailed ? "\(status)\n\(Strings.fxRouteFailed)" : status
         let image = NSImage(systemSymbolName: statusSymbolName(for: state, fxRouteFailed: fxRouteFailed),
-                            accessibilityDescription: status)
+                            accessibilityDescription: description)
         image?.isTemplate = true
-        return image
+        button.image = image
+        button.toolTip = description
     }
 
     /// `fxRouteFailed` is whether Seiren FX failed to start and direct
