@@ -570,8 +570,11 @@ public final class MonitorEngine {
     ///   - deviceNameMatch: case-insensitive substring of the target device name.
     ///   - preferredBufferFrames: best-effort I/O buffer size applied when the
     ///     IOProc starts; smaller = lower monitoring latency. The HAL clamps it to
-    ///     the device's allowed range, and a failure to apply is non-fatal. 128
-    ///     frames ≈ 2.7 ms at 48 kHz.
+    ///     the device's allowed range, and a failure to apply is non-fatal. 512
+    ///     frames ≈ 10.7 ms at 48 kHz. The buffer size applies to the whole
+    ///     device, so when the mic is also the system output (a Seiren with a
+    ///     headphone jack), 128 frames left music playback too little headroom
+    ///     and it dropped out on volume changes and when the voice DSP engaged.
     ///   - autoPollInterval: recorder heartbeat in seconds, supplementing FX's
     ///     running-state listener for prompt call detection.
     ///   - fallbackEnabled: disable non-Seiren sources for deterministic tests
@@ -583,7 +586,7 @@ public final class MonitorEngine {
     ///     returns is then reported as `.permissionDenied`. A host that reports
     ///     `.granted` gets those codes as ordinary `.failed` starts instead.
     public convenience init(deviceNameMatch: String = "seiren",
-                            preferredBufferFrames: UInt32 = 128,
+                            preferredBufferFrames: UInt32 = 512,
                             autoPollInterval: TimeInterval = 1.5,
                             fallbackEnabled: Bool = true,
                             microphoneAccess: (@MainActor () -> MicrophoneAccess)? = nil) {
@@ -595,7 +598,7 @@ public final class MonitorEngine {
     /// The same engine on the given hardware and clock. Tests pass fakes; the
     /// public initializer passes Core Audio and the system clock.
     package init(deviceNameMatch: String = "seiren",
-                 preferredBufferFrames: UInt32 = 128,
+                 preferredBufferFrames: UInt32 = 512,
                  autoPollInterval: TimeInterval = 1.5,
                  fallbackEnabled: Bool = true,
                  microphoneAccess: (@MainActor () -> MicrophoneAccess)? = nil,

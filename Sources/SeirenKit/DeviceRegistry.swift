@@ -36,6 +36,21 @@ public enum DeviceRegistry {
             so nothing is sent to it (docs/PROTOCOL.md §1.1).
             """
         ),
+        DeviceModel(
+            name: "Razer Seiren V2 X",
+            pid: 0x0543,
+            hidUsagePage: 0x000C,
+            chromaLighting: false,
+            commands: CommandTable(),
+            notes: """
+            USB mic with a headphone jack (1 in / 2 out, 48 kHz), so monitoring \
+            runs on the device. Its only HID interface is a Consumer Control \
+            collection (page 0x000C): volume up/down on report 0x01, plus \
+            unexercised Output reports 0x01 (15 bytes) and 0xF0 (7 bytes). No \
+            Razer vendor page and no Chroma zone, so nothing is sent to it. \
+            Play-through (hardware sidetone) is a standard USB-Audio-Class control.
+            """
+        ),
         // Community-captured models go here, or drop a JSON file in the
         // app-support devices directory (see `devicesDirectory()`):
         //   DeviceModel(name: "Razer Seiren V3 Chroma", pid: 0x056F, ...)
