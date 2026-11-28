@@ -158,6 +158,7 @@ Sources/
                      modes, Level, Input ▸, Voice ▸ (EQ + noise suppression),
                      Stream Mixer ▸, Seiren FX install
                      AppDelegate+{Voice,Mixer,Lighting,Driver,LaunchAtLogin,Diagnostics,FirstLaunch}.swift, MixerChannelView.swift, PercentSlider.swift
+                     LevelMeterView.swift (the Seiren FX level bar under the status line)
                      DriverInstaller.swift (Seiren FX install), Strings.swift (every user-facing string)
   seiren-probe/      read-only Core Audio diagnostic + the reference swmon IOProc
 Tests/
