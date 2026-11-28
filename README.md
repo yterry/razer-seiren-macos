@@ -196,7 +196,7 @@ Seiren mic → Seiren for macOS (EQ) → Seiren FX → your recording / calling 
 ```
 
 Open the menu while Seiren FX is running to see how loud your processed voice is.
-The bar below the status line follows speech, and a red mark stays on for two seconds when the signal reaches full scale.
+The bar below the status line follows speech, and a red mark stays on for two seconds when the microphone input reaches full scale.
 
 **Seiren FX and Seiren Stream Mix are microphones only.**
 They have no output channels and cannot appear as speakers in calling apps.

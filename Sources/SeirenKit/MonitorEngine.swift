@@ -176,7 +176,7 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
     // Shared front of the chain: mic channel 0 → gate (gate is zero-latency).
     // The raw-input peak is tracked here, before any processing, so the probe
     // can tell "mic is silent / muted" from "gate closed".
-    var peak = gDiagInputPeak
+    var peak: Float = 0
     var f = 0
     while f < frames {
         let v = mic[f * micCh]
@@ -186,7 +186,8 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
         if a > peak { peak = a }
         f += 1
     }
-    gDiagInputPeak = peak
+    if peak > gDiagInputPeak { gDiagInputPeak = peak }
+    seiren_dsp_record_input_peak(peak)
     seiren_dsp_gate(fxBuf, Int32(frames), 1)                 // no-op if gate off
 
     // Monitor branch (what you hear): EQ only, NO Studio, so it stays
@@ -373,6 +374,10 @@ public final class MonitorEngine {
 
     /// Largest magnitude sent to Seiren FX since the previous read.
     public func takeBroadcastPeak() -> Float { seiren_dsp_take_broadcast_peak() }
+
+    /// True when the raw microphone input reached full scale since the
+    /// previous read, before the gate, EQ and limiter.
+    public func takeInputClipped() -> Bool { seiren_dsp_take_input_peak() >= 0.999 }
 
     public var routeDiagnostics: RouteDiagnostics {
         RouteDiagnostics(callbacks: Int(gDiagCallbacks),
@@ -1596,6 +1601,7 @@ public final class MonitorEngine {
     /// about to start. Main thread, before `AudioDeviceStart`.
     private func resetDiagnostics() {
         _ = takeBroadcastPeak()
+        _ = takeInputClipped()
         gDiagCallbacks = 0
         gDiagInputBuffers = 0
         gDiagOutputBuffers = 0

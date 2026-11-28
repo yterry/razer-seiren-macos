@@ -121,9 +121,6 @@
 /* Auto mode with no active route */
 "meter.waiting" = "Meter appears when an app records";
 
-/* Auto mode with another microphone selected */
-"meter.waitingForFX" = "Meter appears when an app records from Seiren FX";
-
 /* Caption above the volume slider */
 "volume.caption" = "Volume";
 

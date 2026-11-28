@@ -20,7 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var statusMenuIsOpen = false
     private let statusLineItem = AppDelegate.disabledItem("")
     private let levelMeterItem = AppDelegate.disabledItem("")
-    private lazy var levelMeter = LevelMeterView(readPeak: engine.takeBroadcastPeak)
+    private lazy var levelMeter = LevelMeterView(readPeak: engine.takeBroadcastPeak,
+                                                  readClip: engine.takeInputClipped)
     var driverChangeInProgress = false
     /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
@@ -254,12 +255,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private func updateStatusRows() {
         statusLineItem.title = statusLine()
         let live = engine.state == .running && engine.isRoutingThroughFX
-        let waitingForFX = engine.state == .waiting && engine.activeSource?.isSeiren == false
         var note = ""
-        if engine.mode == .auto && engine.state != .running {
-            note = waitingForFX ? Strings.meterWaitingForFX : Strings.meterWaiting
-        } else if waitingForFX {
-            note = Strings.waitingForFXRecording
+        if engine.state == .waiting, let source = engine.activeSource {
+            if !source.isSeiren {
+                note = Strings.waitingForFXRecording
+            } else if engine.fxAvailable {
+                note = Strings.meterWaiting
+            }
         }
         levelMeterItem.title = note
         levelMeterItem.view = live ? levelMeter : nil

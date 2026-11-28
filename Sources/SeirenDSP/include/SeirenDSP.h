@@ -89,6 +89,11 @@ void seiren_dsp_reset(void);
 void seiren_dsp_record_broadcast_peak(float peak);
 /// Atomically read and clear the maximum since the last read.
 float seiren_dsp_take_broadcast_peak(void);
+/// Publish the largest raw microphone magnitude this callback, before the
+/// gate, EQ and limiter. RT-safe.
+void seiren_dsp_record_input_peak(float peak);
+/// Atomically read and clear the maximum since the last read.
+float seiren_dsp_take_input_peak(void);
 
 // MARK: - Noise gate
 //

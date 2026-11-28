@@ -148,9 +148,6 @@ enum Strings {
     static var meterWaiting: String {
         NSLocalizedString("meter.waiting", bundle: .main, value: "Meter appears when an app records", comment: "Auto mode with no active route")
     }
-    static var meterWaitingForFX: String {
-        NSLocalizedString("meter.waitingForFX", bundle: .main, value: "Meter appears when an app records from Seiren FX", comment: "Auto mode with another microphone selected")
-    }
 
     // MARK: - Volume
 

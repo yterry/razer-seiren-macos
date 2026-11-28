@@ -8,20 +8,20 @@ import XCTest
 @MainActor
 final class MenuAccessibilityTests: XCTestCase {
     func testMeterDescribesSpeechAndHoldsTheMostRecentClipForTwoSeconds() {
-        let meter = LevelMeterView { 0 }
+        let meter = LevelMeterView(readPeak: { 0 }, readClip: { false })
         XCTAssertTrue(meter.isAccessibilityElement())
         XCTAssertEqual(meter.accessibilityRole(), .levelIndicator)
         XCTAssertEqual(meter.accessibilityLabel(), "Seiren FX input level")
         XCTAssertEqual(meter.accessibilityValueDescription(), "Silence")
 
-        meter.update(peak: 0.5, at: 10)
+        meter.update(peak: 0.5, inputClipped: false, at: 10)
         XCTAssertEqual(meter.accessibilityValueDescription(), "-6 dBFS")
-        meter.update(peak: 1, at: 11)
-        XCTAssertEqual(meter.accessibilityValueDescription(), "0 dBFS, clipped")
-        meter.update(peak: 1.1, at: 12)
-        meter.update(peak: 0.25, at: 13.99)
+        meter.update(peak: 0.891, inputClipped: true, at: 11)
+        XCTAssertEqual(meter.accessibilityValueDescription(), "-1 dBFS, clipped")
+        meter.update(peak: 0.891, inputClipped: true, at: 12)
+        meter.update(peak: 0.25, inputClipped: false, at: 13.99)
         XCTAssertEqual(meter.accessibilityValueDescription(), "-12 dBFS, clipped")
-        meter.update(peak: 0.25, at: 14)
+        meter.update(peak: 0.25, inputClipped: false, at: 14)
         XCTAssertEqual(meter.accessibilityValueDescription(), "-12 dBFS")
     }
 

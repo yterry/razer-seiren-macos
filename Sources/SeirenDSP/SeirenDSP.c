@@ -97,6 +97,16 @@ float seiren_dsp_take_broadcast_peak(void) {
     return atomic_exchange_explicit(&g_broadcast_peak, 0, memory_order_relaxed);
 }
 
+static _Atomic(float) g_input_peak;
+
+void seiren_dsp_record_input_peak(float peak) {
+    publish_peak(&g_input_peak, peak);
+}
+
+float seiren_dsp_take_input_peak(void) {
+    return atomic_exchange_explicit(&g_input_peak, 0, memory_order_relaxed);
+}
+
 // --- Peak limiter ------------------------------------------------------------
 // Instant attack, one-pole 120 ms release toward unity, -1 dBFS ceiling. Shared
 // by the voice EQ (one per state bank) and the Stream Mixer's bus. Without

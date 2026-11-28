@@ -1,17 +1,20 @@
 import AppKit
 
 /// Peak level of the processed voice sent to Seiren FX. The bar spans -60 to
-/// 0 dBFS. A separate mark holds for two seconds after a full-scale sample.
+/// 0 dBFS. A separate mark holds for two seconds after the raw microphone
+/// input reaches full scale.
 @MainActor
 final class LevelMeterView: NSView {
     private let readPeak: @MainActor () -> Float
+    private let readClip: @MainActor () -> Bool
     private var timer: Timer?
     private var peak: Float = 0
     private var clipUntil: TimeInterval = 0
     private var clipped = false
 
-    init(readPeak: @escaping @MainActor () -> Float) {
+    init(readPeak: @escaping @MainActor () -> Float, readClip: @escaping @MainActor () -> Bool) {
         self.readPeak = readPeak
+        self.readClip = readClip
         super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 14))
         autoresizingMask = [.width]
         setAccessibilityElement(true)
@@ -28,6 +31,7 @@ final class LevelMeterView: NSView {
         guard active != (timer != nil) else { return }
         if active {
             _ = readPeak()   // Discard audio from before the menu opened.
+            _ = readClip()
             let timer = Timer(timeInterval: 0.05, target: self, selector: #selector(sample(_:)),
                               userInfo: nil, repeats: true)
             RunLoop.main.add(timer, forMode: .common)
@@ -36,16 +40,16 @@ final class LevelMeterView: NSView {
             timer?.invalidate()
             timer = nil
             clipUntil = 0
-            update(peak: 0, at: 0)
+            update(peak: 0, inputClipped: false, at: 0)
         }
     }
 
     @objc private func sample(_ timer: Timer) {
-        update(peak: readPeak(), at: ProcessInfo.processInfo.systemUptime)
+        update(peak: readPeak(), inputClipped: readClip(), at: ProcessInfo.processInfo.systemUptime)
     }
 
-    func update(peak: Float, at now: TimeInterval) {
-        if peak >= 1 { clipUntil = now + 2 }
+    func update(peak: Float, inputClipped: Bool, at now: TimeInterval) {
+        if inputClipped { clipUntil = now + 2 }
         let clipped = now < clipUntil
         guard self.peak != peak || self.clipped != clipped else { return }
         self.peak = peak
