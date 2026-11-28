@@ -34,6 +34,41 @@ final class MenuStatesTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(menu.items.first).isEnabled)
     }
 
+    func testStudioAtAnUnsupportedRateShowsTheGateOnlyOnAnActiveFXRoute() {
+        let choices = ["Off", "Reduce noise (gate)", "Studio Denoise (RNNoise)"]
+        let fallback = "Using the noise gate because Studio Denoise requires 48 or 96 kHz."
+        for active in [false, true] {
+            let items = AppDelegate.noiseSuppressionItems(selected: .studio, studioAvailable: false,
+                                                          isRoutingThroughFX: active, hasHeadphones: true, target: nil)
+            XCTAssertEqual(items.map(\.title), active ? choices + [fallback] : choices)
+            XCTAssertEqual(items.map(\.isEnabled), active ? [true, true, false, false] : [true, true, false])
+            XCTAssertEqual(items.filter { $0.state == .on }.map(\.title), ["Studio Denoise (RNNoise)"])
+        }
+    }
+
+    func testAvailableStudioExplainsLatencyWithAndWithoutHeadphones() {
+        for hasHeadphones in [false, true] {
+            let items = AppDelegate.noiseSuppressionItems(selected: .studio, studioAvailable: true,
+                                                          isRoutingThroughFX: true, hasHeadphones: hasHeadphones,
+                                                          target: nil)
+            let caption = hasHeadphones
+                ? "Studio: removes steady noise · your monitor stays low-latency"
+                : "Studio: removes steady noise · adds ~10 ms to Seiren FX"
+            XCTAssertEqual(items.map(\.title), ["Off", "Reduce noise (gate)", "Studio Denoise (RNNoise)", caption])
+            XCTAssertEqual(items.map(\.isEnabled), [true, true, true, false])
+            XCTAssertEqual(items.filter { $0.state == .on }.map(\.title), ["Studio Denoise (RNNoise)"])
+        }
+    }
+
+    func testOtherSuppressionChoicesHaveNoStudioCaptionAtAnUnsupportedRate() {
+        for (mode, title) in [(MonitorEngine.NoiseSuppression.off, "Off"), (.gate, "Reduce noise (gate)")] {
+            let items = AppDelegate.noiseSuppressionItems(selected: mode, studioAvailable: false,
+                                                          isRoutingThroughFX: true, hasHeadphones: false, target: nil)
+            XCTAssertEqual(items.map(\.title), ["Off", "Reduce noise (gate)", "Studio Denoise (RNNoise)"])
+            XCTAssertEqual(items.filter { $0.state == .on }.map(\.title), [title])
+        }
+    }
+
     func testALightingErrorOffersTryAgainUnderTheErrorLine() throws {
         let target = NSObject()
         let menu = AppDelegate.lightingMenu(lastError: .noReply, deviceConnected: true, current: nil, target: target)

@@ -181,6 +181,9 @@
 /* Noise suppression choice */
 "voice.noiseSuppression.studio" = "Studio Denoise (RNNoise)";
 
+/* Studio is selected but the active Seiren FX route uses the gate at this sample rate */
+"voice.studio.usingGate" = "Using the noise gate because Studio Denoise requires 48 or 96 kHz.";
+
 /* Menu line */
 "voice.studio.withMonitor" = "Studio: removes steady noise · your monitor stays low-latency";
 
