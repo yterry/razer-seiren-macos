@@ -87,6 +87,7 @@ See [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
 2. Move **Seiren.app** to `/Applications` and double-click it.
    Releases from **v1.1.0** on are signed and notarized, so it just opens - no Gatekeeper dance.
    (Only the old **v1.0.0** build was unsigned; if you need it, clear it once via **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/Seiren.app`.)
+   Follow [First run](#first-run) to start monitoring from the menu bar.
 3. **To process what other apps record** (EQ + noise suppression in OBS / Zoom / Discord), open the 🎙 menu → **Voice ▸ Install Seiren FX…** and enter your password once - that installs the bundled virtual audio device.
    Then pick **Seiren FX** as the mic in those apps.
    (Headphone monitoring works without this; the EQ and denoise need it - see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx).)
@@ -119,30 +120,34 @@ To turn it back on, run `defaults delete com.yterry.seiren-mac updates.checkEnab
 
 ## First run
 
-1. Open **Seiren** from `/Applications` (or run `.build/release/seiren-mac` from a [source build](#building-from-source)).
-   A 🎙 icon appears in the menu bar; that menu is the whole app, with no Dock icon.
-   On the very first launch a dialog says so and offers **Turn on Auto**, the recommended [mode](#monitoring-modes).
-   **Not now** leaves monitoring off, and the dialog does not come back.
-2. Plug headphones into the **Seiren's** headphone jack (not the Mac's).
-   Monitoring routes mic → *Seiren's* output.
-   (V3 Mini: no jack - skip this; your route is Seiren FX, see [V3 Mini](#v3-mini).)
-3. If you chose **Not now**, click the 🎙 menu and pick a **mode** (see [Monitoring modes](#monitoring-modes)).
-   The same menu changes the mode at any time.
-4. The **first** time, macOS asks for **Microphone** permission - click **Allow** (the app reads the mic to monitor, EQ, and denoise your voice).
-   If you miss the prompt, the menu says **Microphone access is required** and offers **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone** for you.
-5. Speak.
-   You should hear yourself in the headphones.
-   Drag the **Volume** slider to taste.
+Connect the Seiren and open **Seiren** from `/Applications` (or run `.build/release/seiren-mac` from a [source build](#building-from-source)).
+Look for the microphone icon in the menu bar.
+If a welcome dialog appears, choose **Not now** to try the headphone check below, or **Turn on Auto** to monitor during recordings.
+If you have a **V3 Mini**, follow the [V3 Mini steps](#v3-mini) for recording through Seiren FX.
 
-That's it - your choice is remembered, auto-starts when you plug the Seiren back in, and quietly waits when it's unplugged.
-Then shape and clean your voice under **🎙 → Voice**, and install **Seiren FX** to send the processed voice to other apps (see [Creator features](#voice-eq--and-making-other-apps-hear-it-seiren-fx)).
+**Headphone check**
+
+1. Plug your headphones into the Seiren's headphone jack.
+2. Click the microphone icon in the menu bar and choose **On &mdash; always**.
+   You can do this even if no welcome dialog appeared.
+3. When macOS asks for microphone access, click **Allow**.
+   If you previously denied access, follow the [microphone permission steps](#microphone-access-denied).
+4. Speak into the Seiren and listen for your voice in the headphones.
+   Use **Volume** in the same menu to adjust how loud you sound.
+
+To switch to Auto from the microphone menu, choose **Auto &mdash; only while an app uses the mic**.
+Allow microphone access if asked.
+On macOS 14 or later, select the Seiren (or Seiren FX if installed) as the input in your recording app and start recording to hear yourself.
+On macOS 13, Auto monitors whenever the Seiren is connected, just like On.
+Seiren remembers your choice the next time you plug it in.
+See [Monitoring modes](#monitoring-modes) for details.
 
 ### Monitoring modes
 
 - **On — always**: monitor whenever the Seiren is connected.
   Simple, but the macOS recording indicator (orange dot) stays on the whole time - because software monitoring keeps the mic open.
 - **Auto — only while an app uses the mic** *(recommended)*: monitor **only when another app is recording from the Seiren** - i.e. while you're on a Zoom/Teams call.
-  The recording indicator is then on **only during calls**, when it would already be on anyway, and you're not "always recording" the rest of the day.
+  The recording indicator stays on only while an app is recording.
   *(Uses the macOS 14+ per-process audio API; on older macOS it behaves like "On — always".)*
   So your first words aren't cut off, Auto keeps the Seiren's headphone side running silently while you're at the Mac.
   When an app starts recording, the mic is already awake and your voice reaches the app in under a tenth of a second, instead of about a quarter of a second from cold.
@@ -153,7 +158,9 @@ Then shape and clean your voice under **🎙 → Voice**, and install **Seiren F
 ### V3 Mini
 
 The Mini has no headphone jack, so there is nothing to monitor into - the app's job for it is the **EQ + noise suppression**, sent to OBS / Zoom / Discord through Seiren FX.
-The menu says so the first time ("This mic has no headphone jack - it works through Seiren FX") and offers the one-time install; the volume slider and Lighting menu don't apply to the Mini and stay out of the way.
+Choose **On &mdash; always** in the microphone menu and allow microphone access if asked.
+If the menu says the Mini needs Seiren FX, follow the [Seiren FX installation steps](#voice-eq--and-making-other-apps-hear-it-seiren-fx).
+Select **Seiren FX** as the microphone in your recording app and play back a short recording to check your voice.
 From a source checkout, confirm the route from the terminal with `swift run seiren-probe route` (see [Contributing](CONTRIBUTING.md)).
 
 ## Features
@@ -311,16 +318,20 @@ The details are in [How it works](CONTRIBUTING.md#how-it-works), [the latency tr
 
 ## Troubleshooting
 
-To get help with any problem, click the 🎙 menu and choose **Copy Diagnostics**, near the bottom of the menu.
-That copies a plain-text report of the app and Seiren FX versions, the engine's state, your audio devices, the permissions Seiren has and its recent events.
-Read the text, then paste it into a [bug report](https://github.com/yterry/razer-seiren-macos/issues/new?template=bug.yml).
-Devices other than Seirens are listed by type only, but check that you are happy to post everything in it.
+To file a [bug report](https://github.com/yterry/razer-seiren-macos/issues/new?template=bug.yml), choose how you installed Seiren and enter your **Microphone model**.
+Click the microphone icon in the menu bar and look near the bottom of the menu.
+
+- If you see **Copy Diagnostics**, choose it, review the text, and paste it into **Diagnostics** on the form.
+  It lists app and Seiren FX versions, audio devices, permissions, engine state and recent events.
+  Devices other than Seirens are listed by type only.
+- If **Copy Diagnostics** is missing, enter `not available in my version` in **Diagnostics**.
+  For **macOS version**, open the Apple menu and choose **About This Mac**.
+  For **Seiren app version**, select Seiren in Finder's Applications folder and choose **File → Get Info**.
 
 ### Nothing appears in the menu bar after installing
 
 - Seiren has no window and no Dock icon.
   Open **Seiren** from `/Applications`, then look for the microphone icon in the menu bar.
-  The first launch also shows a dialog titled "Seiren runs in the menu bar".
 - On a Mac with a notch, menu bar icons that do not fit are hidden behind the camera.
   Quit or hide some other menu bar apps to make room.
 - On macOS 26 or later, open **System Settings → Menu Bar** and check that Seiren is allowed in the menu bar.
@@ -328,18 +339,18 @@ Devices other than Seirens are listed by type only, but check that you are happy
 
 ### "Microphone access denied"
 
-- The menu says "Microphone access is required".
-  Choose **Open Microphone Settings…**, which opens **System Settings → Privacy & Security → Microphone**.
-- Turn on Seiren in that list, then open the 🎙 menu again; the app checks the permission each time the menu opens.
+- If the microphone menu offers **Open Microphone Settings…**, choose it.
+  You can also open **System Settings → Privacy & Security → Microphone** yourself.
+- Turn on Seiren in that list, then open the microphone menu and select your monitoring mode again.
 - If the menu still says "Microphone access denied", choose **Quit Seiren** and open Seiren from `/Applications` again.
 
 ### "Couldn't start audio"
 
-- The line under it names the Core Audio error.
-  Choose **Try Again**.
-- If it fails again, unplug the Seiren, plug it back in and wait a few seconds; the app starts again on its own when the mic reappears.
+- If the menu says "Couldn't start audio" or "Audio error", note the error message or number.
+  If you see **Try Again**, choose it.
+- If audio still does not start, unplug the Seiren, plug it back in and wait a few seconds.
 - Check that the Seiren is listed under **System Settings → Sound → Input**.
-- If it still fails, choose **Copy Diagnostics** and open a bug report with the text.
+- If it still fails, include the error in your [bug report](#troubleshooting).
 - From a source checkout: `swift run seiren-probe route` runs the engine for 5 s and prints what it saw.
 
 ### The menu says a mic "needs Seiren FX"
@@ -357,7 +368,7 @@ Devices other than Seirens are listed by type only, but check that you are happy
 - After the restart, open the 🎙 menu and then **Voice ▸**.
   If it shows **Equalizer**, macOS loaded Seiren FX.
 - If it still offers **Install Seiren FX…**, choose it again.
-  If that shows the same dialog, choose **Copy Diagnostics** and open a bug report with the text.
+  If that shows the same dialog, [file a bug report](#troubleshooting).
 - From a source checkout: `swift run seiren-probe driver-check` lists the Seiren FX devices macOS loaded and names each check that failed.
 
 ### Apps on Seiren FX hear silence or the wrong microphone
