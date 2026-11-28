@@ -204,6 +204,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         button.appearsDisabled = (engine.mode == .off)
     }
 
+    /// The tooltip and the image's accessibility description use the same
+    /// text, so VoiceOver speaks what the tooltip shows. A failed Seiren FX
+    /// route appends its warning to `status`, because headphone monitoring
+    /// still works while apps recording from Seiren FX hear silence.
     static func configureStatusButton(_ button: NSButton, for state: MonitorEngine.State,
                                       fxRouteFailed: Bool, status: String) {
         let description = fxRouteFailed ? "\(status)\n\(Strings.fxRouteFailed)" : status
