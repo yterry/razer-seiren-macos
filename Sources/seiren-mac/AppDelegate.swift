@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     private var statusItem: NSStatusItem!
     private let statusMenu = NSMenu()
     private var statusMenuIsOpen = false
+    private let statusLineItem = AppDelegate.disabledItem("")
+    private let levelMeterItem = AppDelegate.disabledItem("")
+    private lazy var levelMeter = LevelMeterView(readPeak: engine.takeBroadcastPeak)
     var driverChangeInProgress = false
     /// `SEIREN_DEVICE_MATCH` lets a developer point the app at another input
     /// device (e.g. an input-only USB codec standing in for a jack-less Seiren)
@@ -179,11 +182,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        if menu === statusMenu { statusMenuIsOpen = true }
+        if menu === statusMenu {
+            statusMenuIsOpen = true
+            updateStatusRows()
+        }
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        if menu === statusMenu { statusMenuIsOpen = false }
+        if menu === statusMenu {
+            statusMenuIsOpen = false
+            levelMeter.setSampling(false)
+        }
     }
 
     // MARK: - LightingControllerDelegate
@@ -234,8 +243,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
     /// The menu on screen keeps its items; `menuNeedsUpdate` populates it
     /// again before the next display.
     func rebuildMenu() {
-        guard !statusMenuIsOpen else { return }
-        populateStatusMenu()
+        if statusMenuIsOpen {
+            updateStatusRows()
+        } else {
+            populateStatusMenu()
+        }
+    }
+
+    /// Auto can start or stop broadcasting while this same menu is on screen.
+    private func updateStatusRows() {
+        statusLineItem.title = statusLine()
+        let live = engine.state == .running && engine.isRoutingThroughFX
+        let waitingForFX = engine.state == .waiting && engine.activeSource?.isSeiren == false
+        var note = ""
+        if engine.mode == .auto && engine.state != .running {
+            note = waitingForFX ? Strings.meterWaitingForFX : Strings.meterWaiting
+        } else if waitingForFX {
+            note = Strings.waitingForFXRecording
+        }
+        levelMeterItem.title = note
+        levelMeterItem.view = live ? levelMeter : nil
+        levelMeterItem.isHidden = !live && note.isEmpty
+        levelMeter.setSampling(statusMenuIsOpen && live)
     }
 
     private func populateStatusMenu() {
@@ -256,12 +285,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MonitorEngineDelegate,
         }
 
         // 1. Device / state line (disabled, informational).
-        menu.addItem(disabledItem(statusLine()))
+        updateStatusRows()
+        menu.addItem(statusLineItem)
+        menu.addItem(levelMeterItem)
         if engine.fxRouteFailure != nil {
             menu.addItem(disabledItem(Strings.fxRouteFailed))
-        }
-        if engine.state == .waiting, engine.activeSource?.isSeiren == false {
-            menu.addItem(disabledItem(Strings.waitingForFXRecording))
         }
 
         // 2. Helpers for the states only the user can fix.

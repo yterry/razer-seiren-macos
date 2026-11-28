@@ -131,6 +131,27 @@ enum Strings {
         NSLocalizedString("alert.error.title", bundle: .main, value: "Seiren", comment: "Title of an error dialog")
     }
 
+    // MARK: - Input level meter
+
+    static var meterLabel: String {
+        NSLocalizedString("meter.label", bundle: .main, value: "Seiren FX input level", comment: "Accessibility label and tooltip for the processed voice meter")
+    }
+    static var meterSilent: String {
+        NSLocalizedString("meter.silent", bundle: .main, value: "Silence", comment: "Accessibility value when there is no signal")
+    }
+    static func meterDecibels(_ value: Int) -> String {
+        String(format: NSLocalizedString("meter.decibels", bundle: .main, value: "%ld dBFS", comment: "Accessibility value in decibels relative to full scale"), value)
+    }
+    static func meterClipped(_ level: String) -> String {
+        String(format: NSLocalizedString("meter.clipped", bundle: .main, value: "%@, clipped", comment: "Accessibility value while the clip mark is held"), level)
+    }
+    static var meterWaiting: String {
+        NSLocalizedString("meter.waiting", bundle: .main, value: "Meter appears when an app records", comment: "Auto mode with no active route")
+    }
+    static var meterWaitingForFX: String {
+        NSLocalizedString("meter.waitingForFX", bundle: .main, value: "Meter appears when an app records from Seiren FX", comment: "Auto mode with another microphone selected")
+    }
+
     // MARK: - Volume
 
     static var volumeCaption: String {

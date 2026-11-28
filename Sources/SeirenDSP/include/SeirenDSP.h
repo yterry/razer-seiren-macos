@@ -85,6 +85,11 @@ void seiren_dsp_set_sample_rate(double sampleRate);
 /// ring. Cheap; safe to call from the main thread between IO cycles.
 void seiren_dsp_reset(void);
 
+/// Publish the largest magnitude written to Seiren FX this callback. RT-safe.
+void seiren_dsp_record_broadcast_peak(float peak);
+/// Atomically read and clear the maximum since the last read.
+float seiren_dsp_take_broadcast_peak(void);
+
 // MARK: - Noise gate
 //
 // A simple, zero-added-latency downward gate: when the input sits below a

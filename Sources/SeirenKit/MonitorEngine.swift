@@ -204,6 +204,7 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
     seiren_dsp_process_mono(fxBuf, Int32(frames), 1)        // no-op if EQ off
 
     let level = gMonitorLevel
+    var broadcastPeak: Float = 0
     for bi in 0..<outBL.count {
         let out = outBL[bi]
         guard let dstRaw = out.mData else { continue }
@@ -224,6 +225,10 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
         var ff = 0
         while ff < n {
             let s = src[ff] * gain
+            if !isMonitor {
+                let magnitude = s < 0 ? -s : s
+                if magnitude > broadcastPeak { broadcastPeak = magnitude }
+            }
             var c = 0
             while c < dstCh { d[ff * dstCh + c] = s; c += 1 }
             ff += 1
@@ -235,6 +240,7 @@ nonisolated(unsafe) let routeIOProc: AudioDeviceIOProc = {
             z += 1
         }
     }
+    seiren_dsp_record_broadcast_peak(broadcastPeak)
     return noErr
 }
 
@@ -364,6 +370,9 @@ public final class MonitorEngine {
         /// Nominal rate of the device the proc runs on.
         public var sampleRate: Double
     }
+
+    /// Largest magnitude sent to Seiren FX since the previous read.
+    public func takeBroadcastPeak() -> Float { seiren_dsp_take_broadcast_peak() }
 
     public var routeDiagnostics: RouteDiagnostics {
         RouteDiagnostics(callbacks: Int(gDiagCallbacks),
@@ -1586,6 +1595,7 @@ public final class MonitorEngine {
     /// Zero the RT counters so `routeDiagnostics` describes the route that is
     /// about to start. Main thread, before `AudioDeviceStart`.
     private func resetDiagnostics() {
+        _ = takeBroadcastPeak()
         gDiagCallbacks = 0
         gDiagInputBuffers = 0
         gDiagOutputBuffers = 0
