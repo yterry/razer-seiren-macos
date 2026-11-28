@@ -634,6 +634,20 @@ final class MonitorEngineTests: XCTestCase {
         }
     }
 
+    func testSampleRateChangesKeepStudioSelected() {
+        let engine = makeEngine()
+        defer {
+            engine.setNoiseSuppression(.off)
+            engine.shutdown()
+        }
+        engine.setNoiseSuppression(.studio)
+        for (rate, available) in [(88200.0, false), (96000, true), (44100, false), (48000, true)] {
+            engine.configureSampleRate(rate)
+            XCTAssertEqual(engine.studioAvailable, available, "at \(rate) Hz")
+            XCTAssertEqual(engine.noiseSuppression, .studio, "at \(rate) Hz")
+        }
+    }
+
     func testSampleRateChangesKeepGateAttackAtThreeMilliseconds() {
         let engine = makeEngine()
         defer {

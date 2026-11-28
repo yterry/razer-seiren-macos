@@ -240,7 +240,7 @@ Under **🎙 → Voice ▸ Noise suppression** (creator path - needs Seiren FX):
 - **Studio Denoise (RNNoise)** - a neural denoiser that strips *steady* background noise (fan, AC, hum, computer) while you talk.
   Best quality.
   It adds ~10 ms of latency, but **only on the SeirenFX broadcast** - your **headphone monitor stays low-latency** (it gets gate + EQ, not Studio), so hearing yourself never feels laggy.
-  Runs at 48 / 96 kHz.
+  Runs at 48 / 96 kHz; at other sample rates the Seiren FX route uses the gate instead, and the Voice menu says so.
 
 When you monitor through Seiren FX, the EQ and the gate are heard in your monitor **and** by apps recording **Seiren FX**; Studio denoise applies to the Seiren FX broadcast only.
 

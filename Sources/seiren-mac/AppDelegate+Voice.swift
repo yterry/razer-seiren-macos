@@ -88,18 +88,10 @@ extension AppDelegate {
             }
             submenu.addItem(.separator())
             submenu.addItem(disabledItem(Strings.voiceNoiseSuppression))
-            submenu.addItem(nsItem(Strings.voiceNoiseSuppressionOff, .off))
-            submenu.addItem(nsItem(Strings.voiceNoiseSuppressionGate, .gate))
-            let studio = nsItem(Strings.voiceNoiseSuppressionStudio, .studio)
-            studio.isEnabled = engine.studioAvailable
-            submenu.addItem(studio)
-            if engine.noiseSuppression == .studio {
-                // The "monitor stays low-latency" reassurance only means
-                // something when there is a monitor.
-                submenu.addItem(disabledItem(engine.deviceHasHeadphoneOutput
-                    ? Strings.voiceStudioWithMonitor
-                    : Strings.voiceStudioWithoutMonitor))
-            }
+            Self.noiseSuppressionItems(selected: engine.noiseSuppression, studioAvailable: engine.studioAvailable,
+                                       isRoutingThroughFX: engine.isRoutingThroughFX,
+                                       hasHeadphones: engine.deviceHasHeadphoneOutput, target: self)
+                .forEach(submenu.addItem)
 
             submenu.addItem(.separator())
             submenu.addItem(disabledItem(eqReachCaption()))
@@ -114,13 +106,27 @@ extension AppDelegate {
         return item
     }
 
-    private func nsItem(_ title: String, _ ns: MonitorEngine.NoiseSuppression) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(selectNS(_:)), keyEquivalent: "")
-        item.target = self
-        item.isEnabled = true
-        item.state = (engine.noiseSuppression == ns) ? .on : .off
-        item.representedObject = ns.rawValue
-        return item
+    static func noiseSuppressionItems(selected: MonitorEngine.NoiseSuppression, studioAvailable: Bool,
+                                      isRoutingThroughFX: Bool, hasHeadphones: Bool, target: AnyObject?) -> [NSMenuItem] {
+        func choice(_ title: String, _ mode: MonitorEngine.NoiseSuppression) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(selectNS(_:)), keyEquivalent: "")
+            item.target = target
+            item.isEnabled = mode != .studio || studioAvailable
+            item.state = selected == mode ? .on : .off
+            item.representedObject = mode.rawValue
+            return item
+        }
+        var items = [choice(Strings.voiceNoiseSuppressionOff, .off),
+                     choice(Strings.voiceNoiseSuppressionGate, .gate),
+                     choice(Strings.voiceNoiseSuppressionStudio, .studio)]
+        guard selected == .studio else { return items }
+        if studioAvailable {
+            let caption = hasHeadphones ? Strings.voiceStudioWithMonitor : Strings.voiceStudioWithoutMonitor
+            items.append(disabledItem(caption))
+        } else if isRoutingThroughFX {
+            items.append(disabledItem(Strings.voiceStudioUsingGate))
+        }
+        return items
     }
 
     /// Honest one-liner about where the EQ is actually heard right now.

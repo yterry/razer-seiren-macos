@@ -217,6 +217,9 @@ enum Strings {
     static var voiceNoiseSuppressionStudio: String {
         NSLocalizedString("voice.noiseSuppression.studio", bundle: .main, value: "Studio Denoise (RNNoise)", comment: "Noise suppression choice")
     }
+    static var voiceStudioUsingGate: String {
+        NSLocalizedString("voice.studio.usingGate", bundle: .main, value: "Using the noise gate because Studio Denoise requires 48 or 96 kHz.", comment: "Studio is selected but the active Seiren FX route uses the gate at this sample rate")
+    }
     static var voiceStudioWithMonitor: String {
         NSLocalizedString("voice.studio.withMonitor", bundle: .main, value: "Studio: removes steady noise · your monitor stays low-latency", comment: "Menu line")
     }
