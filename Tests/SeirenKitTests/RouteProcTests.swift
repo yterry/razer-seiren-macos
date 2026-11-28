@@ -159,6 +159,77 @@ final class RouteProcTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(d.inputPeak, 0.5, "peak tracks |raw mic| (never below this run's 0.5)")
     }
 
+    func testBroadcastPeakMeasuresFXAfterEQAndResetsBetweenReads() {
+        let clock = FakeClock()
+        let engine = MonitorEngine(hardware: FakeAudioHardware(clock: clock), clock: clock)
+        defer { engine.shutdown() }
+        _ = engine.takeBroadcastPeak()
+        gMonitorOutBuffers = 1
+        engine.level = 0.25
+        // A half-gain EQ distinguishes the FX output from both the raw mic
+        // and the quieter headphone monitor.
+        seiren_dsp_publish([0.5, 0, 0, 0, 0], 1)
+        let inputs = bufferList(count: 1, frames: 4, fill: 0.25)
+        let mic = inputs[0].mData!.assumingMemoryBound(to: Float.self)
+        let outputs = bufferList(count: 2, frames: 4, fill: 0)
+        mic[2] = -0.75
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        mic[2] = 0.25
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(engine.takeBroadcastPeak(), 0.375)
+        XCTAssertEqual(engine.takeBroadcastPeak(), 0)
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(engine.takeBroadcastPeak(), 0.125)
+        XCTAssertGreaterThanOrEqual(engine.routeDiagnostics.inputPeak, 0.75)
+    }
+
+    func testInputClipReadsTheRawMicBeforeTheEQAndResetsBetweenReads() {
+        let clock = FakeClock()
+        let engine = MonitorEngine(hardware: FakeAudioHardware(clock: clock), clock: clock)
+        defer { engine.shutdown() }
+        _ = engine.takeInputClipped()
+        _ = engine.takeBroadcastPeak()
+        gMonitorOutBuffers = 0
+        // Half gain keeps the processed FX output far below full scale, so
+        // only the raw input can light the clip mark.
+        seiren_dsp_publish([0.5, 0, 0, 0, 0], 1)
+        let inputs = bufferList(count: 1, frames: 4, fill: 0.25)
+        let mic = inputs[0].mData!.assumingMemoryBound(to: Float.self)
+        let outputs = bufferList(count: 1, frames: 4, fill: 0)
+
+        mic[1] = 0.998
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertFalse(engine.takeInputClipped())
+
+        mic[1] = -0.999
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        mic[1] = 0.25
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertLessThan(engine.takeBroadcastPeak(), 0.5)
+        XCTAssertTrue(engine.takeInputClipped())
+        XCTAssertFalse(engine.takeInputClipped())
+
+        mic[1] = 0.999
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertTrue(engine.takeInputClipped())
+        XCTAssertGreaterThanOrEqual(engine.routeDiagnostics.inputPeak, 0.999)
+    }
+
+    func testBroadcastPeakIsSilentWhileTheGateIsClosed() {
+        let clock = FakeClock()
+        let engine = MonitorEngine(hardware: FakeAudioHardware(clock: clock), clock: clock)
+        defer { engine.shutdown() }
+        _ = engine.takeBroadcastPeak()
+        gMonitorOutBuffers = 0
+        seiren_dsp_set_gate(1, -20, 48000)
+        let inputs = bufferList(count: 1, frames: 16, fill: 0.01)
+        let outputs = bufferList(count: 1, frames: 16, fill: 1)
+
+        XCTAssertEqual(run(inputs: inputs, outputs: outputs), noErr)
+        XCTAssertEqual(samples(outputs, 0, frames: 16), [Float](repeating: 0, count: 16))
+        XCTAssertEqual(engine.takeBroadcastPeak(), 0)
+    }
+
     func testFirstNonzeroMicTimestampIgnoresSilenceAndOnlyRecordsOnce() {
         gDiagFirstInputTime = 0
         defer { gDiagFirstInputTime = 0 }

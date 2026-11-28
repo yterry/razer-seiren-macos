@@ -7,6 +7,24 @@ import XCTest
 /// tests read the label, value and visibility from the cells VoiceOver reads.
 @MainActor
 final class MenuAccessibilityTests: XCTestCase {
+    func testMeterDescribesSpeechAndHoldsTheMostRecentClipForTwoSeconds() {
+        let meter = LevelMeterView(readPeak: { 0 }, readClip: { false })
+        XCTAssertTrue(meter.isAccessibilityElement())
+        XCTAssertEqual(meter.accessibilityRole(), .levelIndicator)
+        XCTAssertEqual(meter.accessibilityLabel(), "Seiren FX input level")
+        XCTAssertEqual(meter.accessibilityValueDescription(), "Silence")
+
+        meter.update(peak: 0.5, inputClipped: false, at: 10)
+        XCTAssertEqual(meter.accessibilityValueDescription(), "-6 dBFS")
+        meter.update(peak: 0.891, inputClipped: true, at: 11)
+        XCTAssertEqual(meter.accessibilityValueDescription(), "-1 dBFS, clipped")
+        meter.update(peak: 0.891, inputClipped: true, at: 12)
+        meter.update(peak: 0.25, inputClipped: false, at: 13.99)
+        XCTAssertEqual(meter.accessibilityValueDescription(), "-12 dBFS, clipped")
+        meter.update(peak: 0.25, inputClipped: false, at: 14)
+        XCTAssertEqual(meter.accessibilityValueDescription(), "-12 dBFS")
+    }
+
     func testPercentSliderDescribesItsValueAsAPercentageOfItsRange() throws {
         let unit = PercentSlider(value: 0.42, minValue: 0, maxValue: 1, target: nil, action: nil)
         let unitCell = try XCTUnwrap(unit.cell)

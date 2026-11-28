@@ -79,6 +79,34 @@ static float g_z[SEIREN_DSP_MAX_CHANNELS][SEIREN_DSP_MAX_SECTIONS][2];
 // dodge subnormal-float CPU spikes during silence.
 #define SEIREN_DENORMAL_EPS 1.0e-20f
 
+// A single audio thread publishes maxima. The meter reader can only lower
+// its peak (by exchanging it for zero). If that reset falls between the load
+// and store, the new peak belongs to the next reading.
+static void publish_peak(_Atomic(float) *stored, float value) {
+    if (value > atomic_load_explicit(stored, memory_order_relaxed))
+        atomic_store_explicit(stored, value, memory_order_relaxed);
+}
+
+static _Atomic(float) g_broadcast_peak;
+
+void seiren_dsp_record_broadcast_peak(float peak) {
+    publish_peak(&g_broadcast_peak, peak);
+}
+
+float seiren_dsp_take_broadcast_peak(void) {
+    return atomic_exchange_explicit(&g_broadcast_peak, 0, memory_order_relaxed);
+}
+
+static _Atomic(float) g_input_peak;
+
+void seiren_dsp_record_input_peak(float peak) {
+    publish_peak(&g_input_peak, peak);
+}
+
+float seiren_dsp_take_input_peak(void) {
+    return atomic_exchange_explicit(&g_input_peak, 0, memory_order_relaxed);
+}
+
 // --- Peak limiter ------------------------------------------------------------
 // Instant attack, one-pole 120 ms release toward unity, -1 dBFS ceiling. Shared
 // by the voice EQ (one per state bank) and the Stream Mixer's bus. Without
@@ -517,12 +545,6 @@ void seiren_mixer_set_gain(SeirenMixer *m, int channel, float gain) {
     atomic_store_explicit(&m->targets[channel], fminf(1, fmaxf(0, gain)), memory_order_relaxed);
 }
 
-static void mixer_peak(_Atomic(float) *stored, float value) {
-    // Only the RT proc writes diagnostics, so no compare-exchange loop needed.
-    if (value > atomic_load_explicit(stored, memory_order_relaxed))
-        atomic_store_explicit(stored, value, memory_order_relaxed);
-}
-
 void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBufferList *output) {
     if (!m || !input || !output) return;
     atomic_fetch_add_explicit(&m->callbacks, 1, memory_order_relaxed);
@@ -542,9 +564,9 @@ void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBuf
         float peak = 0;
         for (UInt32 i = 0; i < in->mDataByteSize / sizeof(float); ++i)
             if (isfinite(samples[i])) peak = fmaxf(peak, fabsf(samples[i]));
-        mixer_peak(&m->inputPeaks[b], peak);
+        publish_peak(&m->inputPeaks[b], peak);
         int channel = m->inputChannels[b];
-        if (channel >= 0) mixer_peak(&m->channelPeaks[channel], peak);
+        if (channel >= 0) publish_peak(&m->channelPeaks[channel], peak);
     }
     if (m->mixOutput < 0 || (UInt32)m->mixOutput >= output->mNumberBuffers) return;
     AudioBuffer *out = &output->mBuffers[m->mixOutput];
@@ -579,7 +601,7 @@ void seiren_mixer_process(SeirenMixer *m, const AudioBufferList *input, AudioBuf
         outputPeak = fmaxf(outputPeak, fmaxf(fabsf(left), fabsf(right)));
     }
     for (int c = 0; c < SEIREN_MIXER_MAX_CHANNELS; ++c) m->previous[c] = targets[c];
-    mixer_peak(&m->outputPeak, outputPeak);
+    publish_peak(&m->outputPeak, outputPeak);
 }
 
 OSStatus seiren_mixer_io_proc(AudioObjectID device, const AudioTimeStamp *now,
