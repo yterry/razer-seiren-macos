@@ -46,6 +46,8 @@ final class FakeAudioHardware: AudioHardware {
     }
 
     var devices: [Device]
+    var deadDevices: Set<AudioObjectID> = []
+    private(set) var livenessQueries: [AudioObjectID] = []
     var defaultInputID: AudioObjectID?
     var defaultOutputID: AudioObjectID?
     var recordingProcessesSupported = true
@@ -135,7 +137,10 @@ final class FakeAudioHardware: AudioHardware {
     func defaultOutputDevice() -> AudioObjectID? { defaultOutputID }
     func device(forUID uid: String) -> AudioObjectID? { devices.first { $0.uid == uid }?.id }
     func deviceUID(_ device: AudioObjectID) -> String? { self.device(device)?.uid }
-    func isAlive(_ device: AudioObjectID) -> Bool { self.device(device) != nil }
+    func isAlive(_ device: AudioObjectID) -> Bool {
+        livenessQueries.append(device)
+        return self.device(device) != nil && !deadDevices.contains(device)
+    }
 
     func streamCount(_ device: AudioObjectID, scope: AudioObjectPropertyScope) -> Int {
         guard let device = self.device(device) else { return 0 }

@@ -713,11 +713,16 @@ public final class MonitorEngine {
                 InputDevice(uid: $0.uid, name: $0.name, isSeiren: $0.isSeiren(match: deviceNameMatch))
             }
         let defaultUID = hardware.defaultInputDevice().flatMap { hardware.deviceUID($0) }
-        let source = Self.selectSource(from: candidates, preference: inputPreference,
-                                       defaultInputUID: defaultUID, match: deviceNameMatch,
-                                       fxInstalled: fxOutput != nil && fallbackEnabled,
-                                       otherInputsSupported: otherInputsSupported).flatMap {
-            hardware.isAlive($0.device.id) ? $0 : nil
+        func preferredSource(from inputs: [Candidate]) -> Source? {
+            Self.selectSource(from: inputs, preference: inputPreference,
+                              defaultInputUID: defaultUID, match: deviceNameMatch,
+                              fxInstalled: fxOutput != nil && fallbackEnabled,
+                              otherInputsSupported: otherInputsSupported)
+        }
+        var source = preferredSource(from: inputs)
+        if let first = source, !hardware.isAlive(first.device.id) {
+            let liveInputs = inputs.filter { $0.id != first.device.id && hardware.isAlive($0.id) }
+            source = preferredSource(from: liveInputs)
         }
         selectedSource = source
         activeSource = mode == .off ? nil : source.map {
