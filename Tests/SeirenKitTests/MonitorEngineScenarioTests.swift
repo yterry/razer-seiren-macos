@@ -179,6 +179,82 @@ final class MonitorEngineScenarioTests: XCTestCase {
         assertShutdownLeavesNothing(engine, hardware)
     }
 
+    func testListedDeadPinFallsBackToSeirenUntilThePinRecovers() throws {
+        let hardware = FakeAudioHardware(devices: [headset, seiren, fx, fxFeeder], clock: clock)
+        hardware.deadDevices = [headset.id]
+        hardware.recorders = [recorder(on: fx.id)]
+        let engine = makeEngine(on: hardware)
+        let pinned = MonitorEngine.InputPreference.device(uid: headset.uid)
+        engine.setInputPreference(pinned)
+        engine.setMode(.always)
+
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertEqual(engine.inputPreference, pinned)
+        XCTAssertEqual(engine.activeSource, input(seiren, isSeiren: true))
+        let seirenAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let seirenRoute = IOProc(kind: .route, device: seirenAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware), [
+            .createAggregate(seirenAggregate, subDeviceUIDs: [seiren.uid, fxFeeder.uid]),
+            .createIOProc(seirenRoute), .startIOProc(seirenRoute),
+        ])
+
+        var mark = hardware.calls.count
+        hardware.deadDevices.remove(headset.id)
+        hardware.fireDevicesChanged()
+        XCTAssertEqual(engine.activeSource, input(headset, isSeiren: false))
+        let headsetAggregate = try XCTUnwrap(hardware.aggregates.first)
+        let headsetRoute = IOProc(kind: .route, device: headsetAggregate)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(seirenRoute), .destroyIOProc(seirenRoute), .destroyAggregate(seirenAggregate),
+            .createAggregate(headsetAggregate, subDeviceUIDs: [headset.uid, fxFeeder.uid]),
+            .createIOProc(headsetRoute), .startIOProc(headsetRoute),
+        ])
+        let queryMark = hardware.livenessQueries.count
+        clock.advance(by: 3)
+        XCTAssertFalse(hardware.livenessQueries[queryMark...].contains(seiren.id),
+                       "polling a live pin should not query lower-ranked microphones")
+
+        mark = hardware.calls.count
+        hardware.deadDevices = [headset.id, seiren.id]
+        hardware.fireDevicesChanged()
+        XCTAssertEqual(engine.state, .noDevice)
+        XCTAssertNil(engine.activeSource)
+        XCTAssertEqual(lifecycleCalls(hardware, since: mark), [
+            .stopIOProc(headsetRoute), .destroyIOProc(headsetRoute), .destroyAggregate(headsetAggregate),
+        ])
+        XCTAssertTrue(hardware.runningIOProcs.isEmpty)
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
+    func testListedDeadSeirenFallsBackOnlyWithFXAndARecorder() throws {
+        let hardware = FakeAudioHardware(devices: [seiren, builtInMic], clock: clock)
+        hardware.deadDevices = [seiren.id]
+        let engine = makeEngine(on: hardware)
+        engine.setMode(.always)
+        XCTAssertEqual(engine.state, .noDevice)
+        XCTAssertNil(engine.activeSource)
+        XCTAssertEqual(lifecycleCalls(hardware), [])
+
+        hardware.devices += [fx, fxFeeder]
+        hardware.fireDevicesChanged()
+        XCTAssertEqual(engine.activeSource, input(builtInMic, isSeiren: false))
+        XCTAssertEqual(engine.state, .waiting)
+        XCTAssertEqual(lifecycleCalls(hardware), [])
+
+        hardware.recorders = [recorder(on: fx.id)]
+        hardware.fireRunningStateChanged(on: fx.id)
+        XCTAssertEqual(engine.state, .running)
+        XCTAssertTrue(engine.isRoutingThroughFX)
+        XCTAssertFalse(gMonitorEnabled)
+        let aggregate = try XCTUnwrap(hardware.aggregates.first)
+        let route = IOProc(kind: .route, device: aggregate)
+        XCTAssertEqual(lifecycleCalls(hardware), [
+            .createAggregate(aggregate, subDeviceUIDs: [builtInMic.uid, fxFeeder.uid]),
+            .createIOProc(route), .startIOProc(route),
+        ])
+        assertShutdownLeavesNothing(engine, hardware)
+    }
+
     func testTwoSeirensPreferTheFullDuplexOneAndFallBackToTheInputOnlyOne() throws {
         // The input-only Seiren is listed first, so order alone would pick it.
         let hardware = FakeAudioHardware(devices: [mini, seiren, fx, fxFeeder], clock: clock)
